@@ -5,7 +5,7 @@ import androidx.room.Database
 import androidx.room.Room
 import androidx.room.RoomDatabase
 
-@Database(entities = [Deck::class, CardDetail::class], version = 1)
+@Database(entities = [Deck::class, CardDetail::class, CardImage::class], version = 2)
 abstract class AppDatabase : RoomDatabase() {
     abstract fun deckDao(): DeckDao
 
@@ -20,7 +20,8 @@ abstract class AppDatabase : RoomDatabase() {
                     AppDatabase::class.java,
                     "yugioh_cards.db"
                 )
-                    .createFromAsset("yugioh_cards.db") // 🔥 Esto vincula tu archivo SQLite
+                    .createFromAsset("yugioh_cards.db")
+                    .fallbackToDestructiveMigration() // 🔥 Permite cambios de esquema
                     .build()
                 INSTANCE = instance
                 instance

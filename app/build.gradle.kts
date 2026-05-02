@@ -61,4 +61,12 @@ dependencies {
 
     // Para poder usar corrutinas en la pantalla principal
     implementation("androidx.lifecycle:lifecycle-runtime-ktx:2.6.2")
+
+    // --- LIBRERÍAS PARA IMÁGENES (Glide) ---
+    val glide_version = "4.16.0"
+    implementation("com.github.bumptech.glide:glide:$glide_version")
+    ksp("com.github.bumptech.glide:ksp:$glide_version")
+
+    // --- PERSISTENCIA (GSON) ---
+    implementation("com.google.code.gson:gson:2.10.1")
 }

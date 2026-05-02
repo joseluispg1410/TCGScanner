@@ -6,16 +6,13 @@ import android.content.Context
 import android.content.Intent
 import android.content.pm.PackageManager
 import android.graphics.Color
+import android.graphics.drawable.GradientDrawable
 import android.os.Bundle
 import android.util.Log
 import android.view.Gravity
 import android.view.View
 import android.view.ViewGroup
-import android.widget.Button
-import android.widget.FrameLayout
-import android.widget.LinearLayout
-import android.widget.TextView
-import android.widget.Toast
+import android.widget.*
 import androidx.annotation.OptIn
 import androidx.appcompat.app.AppCompatActivity
 import androidx.camera.camera2.interop.ExperimentalCamera2Interop
@@ -43,18 +40,22 @@ class ScannerActivity : AppCompatActivity() {
     private lateinit var sliderX: Slider
     private lateinit var sliderY: Slider
     private lateinit var sliderSize: Slider
-    private lateinit var sliderFlashIntensity: Slider
 
     private var camera: Camera? = null
     private lateinit var cameraExecutor: ExecutorService
 
     private val zoomLevels = listOf(1f, 1.5f, 2f, 2.5f, 3f)
-    private var zoomIndex = 2 // Inicia en x2 (tercer elemento de la lista)
+    private var zoomIndex = 2 // Inicia en x2
     private var isFlashOn = false
-    private var flashIntensity = 1
 
     private val scannedCards = ArrayList<String>()
     private var lastSavedCard: String? = null
+
+    // Colores del tema Midnight
+    private val colorMidnight = Color.parseColor("#0A192F")
+    private val colorHeaderBg = Color.parseColor("#CC172A45") // Semitransparente
+    private val colorGold = Color.parseColor("#E6B800")
+    private val colorTextLight = Color.parseColor("#CCD6F6")
 
     // Mapas para guardar los ajustes por cada nivel de zoom
     private val offsetMapX = mutableMapOf<Int, Float>()
@@ -75,118 +76,92 @@ class ScannerActivity : AppCompatActivity() {
 
         txtLastCode = TextView(this).apply {
             text = "Esperando código..."
-            setTextColor(Color.GREEN)
+            setTextColor(colorGold)
             textSize = 18f
+            setTypeface(null, android.graphics.Typeface.BOLD)
             gravity = Gravity.CENTER
-            setBackgroundColor(Color.parseColor("#88000000"))
-            setPadding(20, 10, 20, 10)
+            val shape = GradientDrawable().apply {
+                setColor(colorHeaderBg)
+                cornerRadius = 20f
+            }
+            background = shape
+            setPadding(40, 20, 40, 20)
         }
 
-        btnZoom = Button(this).apply {
-            text = "Zoom x${zoomLevels[zoomIndex]}"
-            isEnabled = false
-            setOnClickListener {
-                val cam = camera ?: return@setOnClickListener
-
-                zoomIndex = (zoomIndex + 1) % zoomLevels.size
-                updateUIForZoom()
-
-                val newZoom = zoomLevels[zoomIndex]
-                text = "Zoom x$newZoom"
-
-                cam.cameraControl.setZoomRatio(newZoom)
+        btnZoom = createModernButton("Zoom x${zoomLevels[zoomIndex]}")
+        btnFlash = createModernButton("Flash OFF")
+        btnToggleControls = createModernButton("Ajustes")
+        btnExit = createModernButton("Salir").apply {
+            setTextColor(Color.WHITE)
+            val shape = GradientDrawable().apply {
+                setColor(Color.parseColor("#CCF44336")) // Rojo elegante para salir
+                cornerRadius = 15f
             }
+            background = shape
         }
 
-        btnFlash = Button(this).apply {
-            text = "Flash OFF"
-            isEnabled = false
-            setOnClickListener {
-                if (camera == null) return@setOnClickListener
-                isFlashOn = !isFlashOn
-                if (isFlashOn) {
-                    // Intentamos usar el nivel de intensidad si está disponible (Android 13+)
-                    try {
-                        camera?.cameraControl?.enableTorch(true)
-                        if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.TIRAMISU) {
-                             camera?.cameraControl?.setTorchStrengthLevel(flashIntensity)
-                        }
-                    } catch (e: Exception) {
-                        camera?.cameraControl?.enableTorch(true)
-                    }
-                } else {
-                    camera?.cameraControl?.enableTorch(false)
-                }
-                text = if (isFlashOn) "Flash ON" else "Flash OFF"
-            }
+        btnFlash.setOnClickListener {
+            if (camera == null) return@setOnClickListener
+            isFlashOn = !isFlashOn
+            camera?.cameraControl?.enableTorch(isFlashOn)
+            btnFlash.text = if (isFlashOn) "Flash ON" else "Flash OFF"
+            btnFlash.setTextColor(if (isFlashOn) Color.YELLOW else colorGold)
         }
 
-        btnExit = Button(this).apply {
-            text = "Salir"
-            setOnClickListener {
-                saveAllSettings()
-                val resultIntent = Intent().apply {
-                    putStringArrayListExtra("CARDS", scannedCards)
-                }
-                setResult(Activity.RESULT_OK, resultIntent)
-                finish()
+        btnExit.setOnClickListener {
+            saveAllSettings()
+            val resultIntent = Intent().apply {
+                putStringArrayListExtra("CARDS", scannedCards)
             }
+            setResult(Activity.RESULT_OK, resultIntent)
+            finish()
         }
 
-        btnToggleControls = Button(this).apply {
-            text = "Ajustes"
-            setOnClickListener {
-                controlsPanel.visibility = if (controlsPanel.visibility == View.VISIBLE) View.GONE else View.VISIBLE
-            }
+        btnToggleControls.setOnClickListener {
+            controlsPanel.visibility = if (controlsPanel.visibility == View.VISIBLE) View.GONE else View.VISIBLE
         }
 
         controlsPanel = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
-            setBackgroundColor(Color.parseColor("#CC000000"))
-            setPadding(40, 20, 40, 20)
-            visibility = View.VISIBLE
+            val shape = GradientDrawable().apply {
+                setColor(colorHeaderBg)
+                cornerRadius = 30f
+                setStroke(2, colorGold)
+            }
+            background = shape
+            setPadding(50, 40, 50, 40)
+            visibility = View.GONE // Oculto por defecto
             
-            addView(createLabel("Ajustes del Overlay (Zoom x${zoomLevels[zoomIndex]})"))
+            addView(createLabel("Ajustes del Overlay (Zoom x${zoomLevels[zoomIndex]})").apply { 
+                textSize = 16f
+                setTypeface(null, android.graphics.Typeface.BOLD)
+            })
             
-            addView(createLabel("Posición X"))
+            addView(createLabel("Posición Horizontal (X)"))
             sliderX = createSlider(-0.5f, 0.5f, offsetMapX[zoomIndex] ?: 0f) { value ->
                 offsetMapX[zoomIndex] = value
                 updateOverlay()
             }
             addView(sliderX)
 
-            addView(createLabel("Posición Y"))
+            addView(createLabel("Posición Vertical (Y)"))
             sliderY = createSlider(-0.5f, 0.5f, offsetMapY[zoomIndex] ?: 0f) { value ->
                 offsetMapY[zoomIndex] = value
                 updateOverlay()
             }
             addView(sliderY)
 
-            addView(createLabel("Escala"))
+            addView(createLabel("Escala del cuadro"))
             sliderSize = createSlider(0.5f, 2.0f, sizeFactorMap[zoomIndex] ?: 1f) { value ->
                 sizeFactorMap[zoomIndex] = value
                 updateOverlay()
             }
             addView(sliderSize)
-
-            addView(createLabel("Intensidad Flash")).apply { 
-                id = View.generateViewId() 
-                tag = "labelFlash"
-            }
-            sliderFlashIntensity = createSlider(1f, 10f, flashIntensity.toFloat()) { value ->
-                flashIntensity = value.toInt()
-                if (isFlashOn) {
-                    if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.TIRAMISU) {
-                        camera?.cameraControl?.setTorchStrengthLevel(flashIntensity)
-                    }
-                }
-            }
-            addView(sliderFlashIntensity)
         }
 
         val topButtonsRow = LinearLayout(this).apply {
             orientation = LinearLayout.HORIZONTAL
-            gravity = Gravity.CENTER_HORIZONTAL
+            gravity = Gravity.CENTER
             addView(btnZoom)
             addView(btnFlash)
             addView(btnToggleControls)
@@ -206,17 +181,19 @@ class ScannerActivity : AppCompatActivity() {
                 FrameLayout.LayoutParams.WRAP_CONTENT,
                 FrameLayout.LayoutParams.WRAP_CONTENT,
                 Gravity.CENTER_HORIZONTAL or Gravity.TOP
-            ).apply { topMargin = 200 }
+            ).apply { topMargin = 280 }
         )
 
-        // Panel de controles
+        // Panel de controles (abajo pero con margen)
         mainContainer.addView(
             controlsPanel,
             FrameLayout.LayoutParams(
                 FrameLayout.LayoutParams.MATCH_PARENT,
                 FrameLayout.LayoutParams.WRAP_CONTENT,
                 Gravity.BOTTOM
-            )
+            ).apply { 
+                setMargins(40, 0, 40, 100)
+            }
         )
 
         // Botones superiores
@@ -226,7 +203,7 @@ class ScannerActivity : AppCompatActivity() {
                 FrameLayout.LayoutParams.MATCH_PARENT,
                 FrameLayout.LayoutParams.WRAP_CONTENT,
                 Gravity.TOP
-            ).apply { topMargin = 50 }
+            ).apply { topMargin = 120 }
         )
 
         cameraExecutor = Executors.newSingleThreadExecutor()
@@ -238,8 +215,23 @@ class ScannerActivity : AppCompatActivity() {
                 this, REQUIRED_PERMISSIONS, REQUEST_CODE_PERMISSIONS
             )
         }
-        startCamera()
-        // updateUIForZoom() // Se movió dentro de startCamera tras configurar los sliders
+    }
+
+    private fun createModernButton(title: String): Button {
+        return Button(this).apply {
+            text = title
+            setTextColor(colorGold)
+            textSize = 12f
+            setTypeface(null, android.graphics.Typeface.BOLD)
+            val shape = GradientDrawable().apply {
+                setColor(colorHeaderBg)
+                cornerRadius = 15f
+            }
+            background = shape
+            layoutParams = LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f).apply {
+                setMargins(10, 0, 10, 0)
+            }
+        }
     }
 
     private fun updateUIForZoom() {
@@ -255,6 +247,8 @@ class ScannerActivity : AppCompatActivity() {
             valueFrom = min
             valueTo = max
             value = initial.coerceIn(min, max)
+            trackActiveTintList = android.content.res.ColorStateList.valueOf(colorGold)
+            thumbTintList = android.content.res.ColorStateList.valueOf(colorGold)
             addOnChangeListener { _, value, _ -> onValueChange(value) }
             layoutParams = LinearLayout.LayoutParams(
                 ViewGroup.LayoutParams.MATCH_PARENT,
@@ -266,9 +260,9 @@ class ScannerActivity : AppCompatActivity() {
     private fun createLabel(text: String): TextView {
         return TextView(this).apply {
             this.text = text
-            setTextColor(Color.WHITE)
-            textSize = 14f
-            setPadding(0, 10, 0, 0)
+            setTextColor(colorTextLight)
+            textSize = 13f
+            setPadding(0, 15, 0, 0)
         }
     }
 
@@ -282,8 +276,7 @@ class ScannerActivity : AppCompatActivity() {
         val prefs = getSharedPreferences("OverlayPrefs", Context.MODE_PRIVATE)
         prefs.edit {
             putInt("zoomIndex", zoomIndex)
-            putInt("flashIntensity", flashIntensity)
-            putString("lastSavedCard", lastSavedCard) // Guardar la última carta
+            putString("lastSavedCard", lastSavedCard)
             zoomLevels.indices.forEach { i ->
                 putFloat("offsetX_$i", offsetMapX[i] ?: 0f)
                 putFloat("offsetY_$i", offsetMapY[i] ?: 0f)
@@ -294,8 +287,7 @@ class ScannerActivity : AppCompatActivity() {
 
     private fun loadAllSettings() {
         val prefs = getSharedPreferences("OverlayPrefs", Context.MODE_PRIVATE)
-        zoomIndex = prefs.getInt("zoomIndex", 0)
-        flashIntensity = prefs.getInt("flashIntensity", 1)
+        zoomIndex = prefs.getInt("zoomIndex", 2) // Por defecto x2
         zoomLevels.indices.forEach { i ->
             offsetMapX[i] = prefs.getFloat("offsetX_$i", 0f)
             offsetMapY[i] = prefs.getFloat("offsetY_$i", 0f)
@@ -329,7 +321,7 @@ class ScannerActivity : AppCompatActivity() {
                             runOnUiThread {
                                 if (!scannedCards.contains(code)) {
                                     scannedCards.add(code)
-                                    lastSavedCard = code // Actualizar la última detectada
+                                    lastSavedCard = code
                                     txtLastCode.text = "¡Detectado: $code!"
                                     Log.d("SCAN", "Lista de cartas: $scannedCards")
                                 }
@@ -339,23 +331,7 @@ class ScannerActivity : AppCompatActivity() {
                     ))
                 }
 
-            // Seleccionar la mejor cámara trasera (que suele incluir zoom óptico)
-            val cameraSelector = try {
-                val bestCameraId = cameraProvider.availableCameraInfos
-                    .map { androidx.camera.camera2.interop.Camera2CameraInfo.from(it) }
-                    .sortedByDescending { it.getCameraCharacteristic(android.hardware.camera2.CameraCharacteristics.INFO_SUPPORTED_HARDWARE_LEVEL) }
-                    .firstOrNull()?.cameraId
-                
-                if (bestCameraId != null) {
-                    CameraSelector.Builder().addCameraFilter { cameraInfos ->
-                        cameraInfos.filter { androidx.camera.camera2.interop.Camera2CameraInfo.from(it).cameraId == bestCameraId }
-                    }.build()
-                } else {
-                    CameraSelector.DEFAULT_BACK_CAMERA
-                }
-            } catch (e: Exception) {
-                CameraSelector.DEFAULT_BACK_CAMERA
-            }
+            val cameraSelector = CameraSelector.DEFAULT_BACK_CAMERA
 
             try {
                 cameraProvider.unbindAll()
@@ -363,28 +339,10 @@ class ScannerActivity : AppCompatActivity() {
                     this, cameraSelector, preview, imageAnalyzer
                 )
                 
-                // Aplicar el zoom inicial guardado o por defecto (x2)
                 camera?.cameraControl?.setZoomRatio(zoomLevels[zoomIndex])
                 
-                // Actualizar UI ahora que los sliders existen y el zoom está aplicado
                 runOnUiThread {
                     updateUIForZoom()
-                }
-                
-                // Configurar el slider de flash basado en las capacidades del hardware
-                val labelFlash = controlsPanel.findViewWithTag<View>("labelFlash")
-                if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.TIRAMISU) {
-                    // En CameraX 1.6.0 el método es accesible pero puede que el hardware no lo soporte
-                    // Usamos un valor por defecto si no podemos obtenerlo
-                    val maxLevel = 10 // Valor por defecto si es Android 13+
-                    
-                    sliderFlashIntensity.valueTo = maxLevel.toFloat()
-                    sliderFlashIntensity.value = flashIntensity.coerceIn(1, maxLevel).toFloat()
-                    sliderFlashIntensity.visibility = View.VISIBLE
-                    labelFlash?.visibility = View.VISIBLE
-                } else {
-                    sliderFlashIntensity.visibility = View.GONE
-                    labelFlash?.visibility = View.GONE
                 }
 
                 btnZoom.isEnabled = true
@@ -393,6 +351,15 @@ class ScannerActivity : AppCompatActivity() {
                 Log.e("CAMERA", "Error al iniciar cámara", e)
             }
         }, ContextCompat.getMainExecutor(this))
+        
+        btnZoom.setOnClickListener {
+            val cam = camera ?: return@setOnClickListener
+            zoomIndex = (zoomIndex + 1) % zoomLevels.size
+            updateUIForZoom()
+            val newZoom = zoomLevels[zoomIndex]
+            btnZoom.text = "Zoom x$newZoom"
+            cam.cameraControl.setZoomRatio(newZoom)
+        }
     }
 
     override fun onDestroy() {
