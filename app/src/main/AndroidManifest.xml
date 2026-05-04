@@ -3,6 +3,7 @@
     xmlns:tools="http://schemas.android.com/tools">
 
     <uses-permission android:name="android.permission.CAMERA"/>
+    <uses-permission android:name="android.permission.INTERNET" />
     <uses-feature android:name="android.hardware.camera" android:required="true"/>
 
     <application
@@ -19,15 +20,18 @@
         <activity android:name=".ScannerActivity" />
 
         <activity
-            android:name=".MainActivity"
-            android:exported="true">
-
+            android:name=".SplashActivity"
+            android:exported="true"
+            android:theme="@style/Theme.TCGScanner">
             <intent-filter>
                 <action android:name="android.intent.action.MAIN" />
                 <category android:name="android.intent.category.LAUNCHER" />
             </intent-filter>
-
         </activity>
+
+        <activity
+            android:name=".MainActivity"
+            android:exported="false" />
 
     </application>
 

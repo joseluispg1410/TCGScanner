@@ -19,6 +19,9 @@ interface DeckDao {
 
     @androidx.room.Query("SELECT image_url FROM cards WHERE nombre_es = :name LIMIT 1")
     fun getCardImageUrl(name: String): String?
+
+    @androidx.room.Query("SELECT nombre_en FROM cards WHERE nombre_es = :nameEs LIMIT 1")
+    fun getCardNameEn(nameEs: String): String?
 }
 
 @androidx.room.Entity(tableName = "card_deck")
