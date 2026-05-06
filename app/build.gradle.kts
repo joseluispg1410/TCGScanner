@@ -54,7 +54,7 @@ dependencies {
     implementation("com.google.mlkit:text-recognition:16.0.0")
 
     // --- LIBRERÍAS PARA LA BASE DE DATOS (Room) ---
-    val room_version = "2.6.1"
+    val room_version = "2.8.4"
     implementation("androidx.room:room-runtime:$room_version")
     implementation("androidx.room:room-ktx:$room_version")
     ksp("androidx.room:room-compiler:$room_version")
@@ -69,4 +69,14 @@ dependencies {
 
     // --- PERSISTENCIA (GSON) ---
     implementation("com.google.code.gson:gson:2.10.1")
+
+    // --- FIREBASE & AUTH ---
+    implementation(platform("com.google.firebase:firebase-bom:32.7.0"))
+    implementation("com.google.firebase:firebase-auth-ktx")
+    implementation("com.google.android.gms:play-services-auth:20.7.0")
+
+    // --- NETWORKING (Retrofit) ---
+    implementation("com.squareup.retrofit2:retrofit:2.9.0")
+    implementation("com.squareup.retrofit2:converter-gson:2.9.0")
+    implementation("com.squareup.okhttp3:logging-interceptor:4.12.0")
 }

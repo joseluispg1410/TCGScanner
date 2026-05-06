@@ -22,7 +22,11 @@ import androidx.camera.view.PreviewView
 import androidx.core.app.ActivityCompat
 import androidx.core.content.ContextCompat
 import androidx.core.content.edit
+import androidx.lifecycle.lifecycleScope
 import com.google.android.material.slider.Slider
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 import java.util.concurrent.ExecutorService
 import java.util.concurrent.Executors
 
@@ -312,23 +316,29 @@ class ScannerActivity : AppCompatActivity() {
                 .setTargetResolution(android.util.Size(1920, 1080))
                 .setBackpressureStrategy(ImageAnalysis.STRATEGY_KEEP_ONLY_LATEST)
                 .build()
-                .also {
-                    it.setAnalyzer(cameraExecutor, CardAnalyzer(
-                        context = this,
-                        onCodeDetected = { code ->
-                            if (code == lastSavedCard) return@CardAnalyzer
-                            
-                            runOnUiThread {
-                                if (!scannedCards.contains(code)) {
-                                    scannedCards.add(code)
-                                    lastSavedCard = code
-                                    txtLastCode.text = "¡Detectado: $code!"
-                                    Log.d("SCAN", "Lista de cartas: $scannedCards")
+                .also { analyzer ->
+                    lifecycleScope.launch {
+                        val db = AppDatabase.getDatabase(this@ScannerActivity).deckDao()
+                        val validCardCodes = withContext(Dispatchers.IO) { db.getAllCardIds().toSet() }
+                        
+                        analyzer.setAnalyzer(cameraExecutor, CardAnalyzer(
+                            context = this@ScannerActivity,
+                            validCardCodes = validCardCodes,
+                            onCodeDetected = { code ->
+                                if (code == lastSavedCard) return@CardAnalyzer
+                                
+                                runOnUiThread {
+                                    if (!scannedCards.contains(code)) {
+                                        scannedCards.add(code)
+                                        lastSavedCard = code
+                                        txtLastCode.text = "¡Detectado: $code!"
+                                        Log.d("SCAN", "Lista de cartas: $scannedCards")
+                                    }
                                 }
-                            }
-                        },
-                        getScanRect = { overlayView.getScanRect() }
-                    ))
+                            },
+                            getScanRect = { overlayView.getScanRect() }
+                        ))
+                    }
                 }
 
             val cameraSelector = CameraSelector.DEFAULT_BACK_CAMERA
