@@ -19,8 +19,18 @@ class CardAnalyzer(
     private val getScanRect: () -> RectF?
 ) : ImageAnalysis.Analyzer {
 
-    private val recognizer = TextRecognition.getClient(TextRecognizerOptions.DEFAULT_OPTIONS)
-    private val regex = Regex("([A-Z0-9]{3,7})\\s*-\\s*([A-Z0-9]{3,6})")
+    companion object {
+        // Motor único compartido: Se mantiene "caliente" en memoria
+        private val recognizer = TextRecognition.getClient(TextRecognizerOptions.DEFAULT_OPTIONS)
+        
+        // Función de calentamiento Pro
+        fun warmUp() {
+            val emptyImage = InputImage.fromBitmap(Bitmap.createBitmap(1, 1, Bitmap.Config.ARGB_8888), 0)
+            recognizer.process(emptyImage)
+        }
+    }
+
+    private val regex = Regex("([A-Z0-9]{2,10})\\s*-\\s*([A-Z0-9]{3,10})")
 
     @OptIn(ExperimentalGetImage::class)
     override fun analyze(imageProxy: ImageProxy) {
@@ -34,7 +44,9 @@ class CardAnalyzer(
             .addOnSuccessListener { visionText ->
                 for (block in visionText.textBlocks) {
                     for (line in block.lines) {
-                        val text = line.text.uppercase().replace(" ", "")
+                        val text = line.text.uppercase().replace(" ", "").replace("—", "-")
+                        Log.d("OCR_RAW", "Detectado: $text") // Log para depurar qué ve la IA
+                        
                         val match = regex.find(text)
 
                         if (match != null) {
@@ -43,19 +55,27 @@ class CardAnalyzer(
                             
                             val healedCode = healCode(part1, part2)
                             
-                            // VALIDACIÓN TOTAL: ¿Existe esta carta exacta en la base de datos?
-                            // Probamos el código tal cual y también normalizando O por 0 (error común OCR)
-                            val alternativeCode = healedCode.replace('O', '0')
+                            // Probamos varias combinaciones de "curación" para el código completo
+                            val variations = mutableSetOf(healedCode)
+                            variations.add(healedCode.replace('O', '0'))
+                            variations.add(healedCode.replace('0', 'O'))
                             
-                            val finalCode = when {
-                                validCardCodes.contains(healedCode) -> healedCode
-                                validCardCodes.contains(alternativeCode) -> alternativeCode
-                                else -> null
+                            // Caso específico SD4 -> a veces el OCR lee 5D4
+                            if (healedCode.startsWith("5D")) {
+                                variations.add(healedCode.replaceFirst("5D", "SD"))
                             }
 
-                            if (finalCode != null) {
-                                Log.i("SCAN_VALID", "¡MATCH REAL!: $finalCode")
-                                onCodeDetected(finalCode)
+                            var foundCode: String? = null
+                            for (v in variations) {
+                                if (validCardCodes.contains(v)) {
+                                    foundCode = v
+                                    break
+                                }
+                            }
+
+                            if (foundCode != null) {
+                                Log.i("SCAN_VALID", "¡MATCH REAL!: $foundCode")
+                                onCodeDetected(foundCode)
                                 return@addOnSuccessListener
                             }
                         }

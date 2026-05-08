@@ -53,19 +53,13 @@ dependencies {
 
     implementation("com.google.mlkit:text-recognition:16.0.0")
 
-    // --- LIBRERÍAS PARA LA BASE DE DATOS (Room) ---
-    val room_version = "2.8.4"
-    implementation("androidx.room:room-runtime:$room_version")
-    implementation("androidx.room:room-ktx:$room_version")
-    ksp("androidx.room:room-compiler:$room_version")
-
-    // Para poder usar corrutinas en la pantalla principal
-    implementation("androidx.lifecycle:lifecycle-runtime-ktx:2.6.2")
-
     // --- LIBRERÍAS PARA IMÁGENES (Glide) ---
     val glide_version = "4.16.0"
     implementation("com.github.bumptech.glide:glide:$glide_version")
     ksp("com.github.bumptech.glide:ksp:$glide_version")
+    
+    // Para poder usar corrutinas en la pantalla principal
+    implementation("androidx.lifecycle:lifecycle-runtime-ktx:2.6.2")
 
     // --- PERSISTENCIA (GSON) ---
     implementation("com.google.code.gson:gson:2.10.1")

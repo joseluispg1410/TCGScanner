@@ -18,6 +18,7 @@ import android.view.inputmethod.InputMethodManager
 import android.widget.*
 import androidx.activity.OnBackPressedCallback
 import androidx.appcompat.app.AppCompatActivity
+import androidx.core.content.FileProvider
 import androidx.core.content.edit
 import androidx.core.view.ViewCompat
 import androidx.core.view.WindowInsetsCompat
@@ -27,6 +28,7 @@ import com.bumptech.glide.Glide
 import com.google.gson.Gson
 import com.google.gson.reflect.TypeToken
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import org.json.JSONObject
@@ -44,7 +46,12 @@ class MainActivity : AppCompatActivity() {
     private lateinit var toolbarTitle: TextView
     private lateinit var searchInput: EditText
     private lateinit var searchBtn: ImageButton
+    private lateinit var scrollView: ScrollView
     private var isStatsOpen = false
+
+    // 📈 PAGINACIÓN
+    private var decksLoadedCount = 0
+    private val PAGE_SIZE = 15
 
     // 💰 PRECIOS
     private val priceCache = mutableMapOf<String, String>()
@@ -68,14 +75,32 @@ class MainActivity : AppCompatActivity() {
     private var isDeckViewMode = false
     private var selectedCollection: String? = null
     private var showOnlyOwnedDecks = true
+    private var showProgress = true
 
     // 🔍 ESTADO DE BÚSQUEDA Y CACHÉ
     private var isSearchMode = false
     private var searchQuery = ""
+    private var tcgId: Int = 1
+    private var tcgName: String = "TCG SCANNER"
+    private var tcgCode: String = "YGO"
+    
     private val deckNamesCache = mutableMapOf<String, String>()
     private val cardNamesCache = mutableMapOf<String, String>()
+    private val deckTotalsCache = mutableMapOf<String, Int>()
+    
+    // --- NUEVAS CACHÉS PARA MODO SIN SQLITE ---
     private var allDecksCache: List<Deck>? = null
+    private var allCardDetailsCache: List<CardDetail>? = null
+    private var allCardImagesCache: List<CardImage>? = null
+    
+    private val customCoversCache = mutableMapOf<String, List<String>>()
+    private val globalCoversCache = mutableMapOf<String, List<String>>()
     private val resIdCache = mutableMapOf<String, Int>()
+    private var pendingDeckCode: String? = null
+
+    // 🔄 ESTADO DE IMPORTACIÓN WIKI
+    private val activeImports = mutableMapOf<String, String>() // deckCode -> Status
+    private var importJob: kotlinx.coroutines.Job? = null
 
     // 🎯 MODO SELECCIÓN
     private var isSelectionMode = false
@@ -84,6 +109,10 @@ class MainActivity : AppCompatActivity() {
     private lateinit var searchLayout: LinearLayout
     private lateinit var selectionLayout: LinearLayout
     private lateinit var selectionCountText: TextView
+
+    companion object {
+        var allCardIdsCache: Set<String>? = null
+    }
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -133,8 +162,12 @@ class MainActivity : AppCompatActivity() {
                 }
             }
 
+            tcgId = intent.getIntExtra("TCG_ID", 1)
+            tcgName = intent.getStringExtra("TCG_NAME") ?: "TCG SCANNER"
+            tcgCode = intent.getStringExtra("TCG_CODE") ?: "YGO"
+
             toolbarTitle = TextView(this@MainActivity).apply {
-                text = "TCG SCANNER"
+                text = tcgName
                 textSize = 18f
                 setTextColor(Color.parseColor("#333333"))
                 setTypeface(null, android.graphics.Typeface.BOLD)
@@ -216,7 +249,7 @@ class MainActivity : AppCompatActivity() {
             setPadding(0, 0, 0, 300)
         }
 
-        val scrollView = ScrollView(this).apply {
+        scrollView = ScrollView(this).apply {
             addView(listContainer)
             setBackgroundColor(Color.TRANSPARENT)
         }
@@ -306,37 +339,70 @@ class MainActivity : AppCompatActivity() {
         })
 
         loadPersistedData()
-        updateCachesAndRefresh()
+        updateFullCatalog(showToast = false) // Sincronización automática al arrancar
+
+        // 🚀 PRE-CARGA PRO: Cargar IDs y calentar el motor de IA antes de que se abra el scanner
+        lifecycleScope.launch(Dispatchers.IO) {
+            // El catálogo se carga en memoria dentro de updateFullCatalog
+            // Esperamos un poco a que el catálogo esté listo antes de generar los IDs para el scanner
+            while (allCardDetailsCache == null) {
+                delay(500)
+            }
+            
+            val details = allCardDetailsCache ?: emptyList()
+            val mappings = allDecksCache ?: emptyList()
+            
+            val translatedIds = mutableSetOf<String>()
+            
+            details.forEach { detail ->
+                val id = detail.deckCardId ?: return@forEach
+                translatedIds.add(id)
+                val currentBase = getBaseCode(id)
+                val deck = mappings.find { it.codigoDeckSp == currentBase || it.codigoDeckEn == currentBase }
+                
+                // Si la carta es EN, generar el equivalente SP para el scanner
+                if (deck?.codigoDeckEn == currentBase && deck.codigoDeckSp != null) {
+                    translatedIds.add(id.replace(currentBase, deck.codigoDeckSp!!))
+                }
+                // Si la carta es SP, generar el equivalente EN para el scanner
+                if (deck?.codigoDeckSp == currentBase && deck.codigoDeckEn != null) {
+                    translatedIds.add(id.replace(currentBase, deck.codigoDeckEn!!))
+                }
+            }
+            
+            allCardIdsCache = translatedIds
+            CardAnalyzer.warmUp() // 🔥 Calentamiento Pro
+            Log.d("CACHE", "Scanner listo con ${translatedIds.size} códigos (reales + traducidos)")
+        }
     }
 
     private fun updateCachesAndRefresh() {
         lifecycleScope.launch {
-            val db = AppDatabase.getDatabase(this@MainActivity).deckDao()
-            
-            // LOG DE DIAGNÓSTICO: Ver qué barajas hay realmente en la DB local
-            withContext(Dispatchers.IO) {
-                val allDecks = db.getAllDeckCodes()
-                Log.d("DB_CHECK", "Barajas en SQLite local: $allDecks")
-                
-                // Verificar específicamente CT2-SP
-                val ct2Name = db.getDeckName("CT2-SP")
-                Log.d("DB_CHECK", "Consulta específica CT2-SP: ${ct2Name ?: "NO ENCONTRADO"}")
+            val userPrefs = getSharedPreferences("UserPrefs", Context.MODE_PRIVATE)
+            val userId = userPrefs.getInt("user_id", -1)
+
+            // 1. CARGAR CONFIGURACIONES DESDE EL SERVIDOR (Sustituye a las tablas de personalización locales)
+            if (userId != -1) {
+                try {
+                    // Aquí podrías añadir endpoints para traer todas las carátulas de golpe si quieres optimizar,
+                    // por ahora las limpiaremos para forzar la carga individual desde la API al mostrar cada deck.
+                    customCoversCache.clear()
+                    globalCoversCache.clear()
+                } catch (e: Exception) {
+                    Log.e("SYNC", "Error cargando personalizaciones: ${e.message}")
+                }
             }
 
-            withContext(Dispatchers.IO) {
-                // Caché de barajas
-                cardMap.keys.map { getBaseCode(it) }.distinct().forEach { code ->
-                    if (!deckNamesCache.containsKey(code)) {
-                        deckNamesCache[code] = db.getDeckName(code) ?: "Colección"
-                    }
-                }
-                // Caché de cartas
-                cardMap.keys.forEach { code ->
-                    if (!cardNamesCache.containsKey(code)) {
-                        cardNamesCache[code] = db.getCardName(code) ?: code
-                    }
-                }
+            // 2. ACTUALIZAR TOTALES POR DECK (Basado en el catálogo en memoria)
+            val allDecks = allDecksCache ?: emptyList()
+            val allDetails = allCardDetailsCache ?: emptyList()
+            
+            allDecks.forEach { deck ->
+                val code = deck.codigoDeckSp ?: ""
+                val count = allDetails.count { it.codigoDeckSp == code }
+                deckTotalsCache[code] = count
             }
+
             refreshList()
         }
     }
@@ -345,8 +411,14 @@ class MainActivity : AppCompatActivity() {
         val popup = PopupMenu(this, view)
         popup.menu.add("Estadísticas")
         popup.menu.add(if (isDeckViewMode) "Vista Detallada" else "Vista de Carátulas")
+        
+        val progressItem = popup.menu.add("Mostrar Progreso")
+        progressItem.isCheckable = true
+        progressItem.isChecked = showProgress
+        
         popup.menu.add("Descargar de la nube")
         popup.menu.add("Subir a la nube")
+        popup.menu.add("Exportar colección (CSV)")
         popup.menu.add("Cerrar sesión")
         
         popup.setOnMenuItemClickListener { item ->
@@ -357,8 +429,14 @@ class MainActivity : AppCompatActivity() {
                     saveDataToDisk() // Guardar preferencia de vista
                     refreshList()
                 }
+                "Mostrar Progreso" -> {
+                    showProgress = !showProgress
+                    saveDataToDisk()
+                    refreshList()
+                }
                 "Descargar de la nube" -> pullFromCloud(showToast = true)
                 "Subir a la nube" -> pushToCloud(showToast = true)
+                "Exportar colección (CSV)" -> exportCollectionToCSV()
                 "Cerrar sesión" -> logout()
             }
             true
@@ -449,16 +527,15 @@ class MainActivity : AppCompatActivity() {
             val list = data?.getStringArrayListExtra("CARDS") ?: return
             lastScanCount = list.size
             lifecycleScope.launch {
-                val db = AppDatabase.getDatabase(this@MainActivity).deckDao()
                 list.forEach { code ->
-                    val cardName = withContext(Dispatchers.IO) { db.getCardName(code) }
+                    val cardName = cardNamesCache[code]
                     
                     if (cardName != null) {
                         cardMap[code] = (cardMap[code] ?: 0) + 1
                     } else {
                         // Si no encontramos la carta específica, verificamos si al menos el SET existe
                         val setPart = getBaseCode(code)
-                        val isSetValid = withContext(Dispatchers.IO) { db.getDeckName(setPart) != null }
+                        val isSetValid = deckNamesCache.containsKey(setPart)
                         
                         if (isSetValid) {
                             // Es una carta de un set conocido, aunque no tengamos su nombre aún
@@ -471,11 +548,183 @@ class MainActivity : AppCompatActivity() {
                 saveDataToDisk()
                 updateCachesAndRefresh()
             }
+        } else if (requestCode == 200 && resultCode == Activity.RESULT_OK) {
+            val deckCode = pendingDeckCode ?: return
+            val uris = mutableListOf<android.net.Uri>()
+            
+            data?.clipData?.let { clipData ->
+                for (i in 0 until clipData.itemCount) {
+                    uris.add(clipData.getItemAt(i).uri)
+                }
+            } ?: data?.data?.let { uris.add(it) }
+
+            if (uris.isNotEmpty()) {
+                saveCustomCovers(deckCode, uris)
+            }
+        }
+    }
+
+    private fun pickCustomCover(deckCode: String) {
+        pendingDeckCode = deckCode
+        val intent = Intent(Intent.ACTION_PICK).apply {
+            type = "image/*"
+            putExtra(Intent.EXTRA_ALLOW_MULTIPLE, true)
+        }
+        startActivityForResult(intent, 200)
+    }
+
+    private fun importDeckWiki(deckCode: String) {
+        lifecycleScope.launch {
+            try {
+                Toast.makeText(this@MainActivity, "Iniciando importación...", Toast.LENGTH_SHORT).show()
+                val response = RetrofitClient.instance.importDeckFromWiki(deckCode)
+                if (response.isSuccessful) {
+                    activeImports[deckCode] = "PROCESSING"
+                    startPollingImportStatus(deckCode)
+                    refreshList() // Para que aparezca la barra en los detalles si estamos ahí
+                } else {
+                    Toast.makeText(this@MainActivity, "Error al solicitar importación", Toast.LENGTH_SHORT).show()
+                }
+            } catch (e: Exception) {
+                Toast.makeText(this@MainActivity, "Error de red: ${e.message}", Toast.LENGTH_SHORT).show()
+            }
+        }
+    }
+
+    private fun showEditDeckCodeDialog(oldCode: String) {
+        val input = EditText(this).apply {
+            setText(oldCode)
+            setPadding(50, 40, 50, 40)
+        }
+        
+        androidx.appcompat.app.AlertDialog.Builder(this)
+            .setTitle("Editar código de baraja")
+            .setMessage("Cambiar el código '$oldCode' por:")
+            .setView(input)
+            .setPositiveButton("ACTUALIZAR") { _, _ ->
+                val newCode = input.text.toString().trim()
+                if (newCode.isNotEmpty() && newCode != oldCode) {
+                    updateDeckCodeOnServer(oldCode, newCode)
+                }
+            }
+            .setNegativeButton("CANCELAR", null)
+            .show()
+    }
+
+    private fun updateDeckCodeOnServer(oldCode: String, newCode: String) {
+        lifecycleScope.launch {
+            try {
+                Toast.makeText(this@MainActivity, "Actualizando en el servidor...", Toast.LENGTH_SHORT).show()
+                val response = RetrofitClient.instance.updateDeckCode(UpdateDeckCodeRequest(oldCode, newCode))
+                
+                if (response.isSuccessful) {
+                    // Actualizar también nuestra colección local si tiene cartas de este deck
+                    val newCardMap = mutableMapOf<String, Int>()
+                    cardMap.forEach { (code, count) ->
+                        if (getBaseCode(code) == oldCode) {
+                            val newFullCode = code.replace(oldCode, newCode)
+                            newCardMap[newFullCode] = count
+                        } else {
+                            newCardMap[code] = count
+                        }
+                    }
+                    cardMap = newCardMap
+                    
+                    selectedCollection = newCode
+                    allDecksCache = null // Forzar recarga
+                    saveDataToDisk()
+                    updateFullCatalog(showToast = true)
+                    Toast.makeText(this@MainActivity, "Código actualizado correctamente", Toast.LENGTH_SHORT).show()
+                } else {
+                    Toast.makeText(this@MainActivity, "Error en el servidor: ${response.message()}", Toast.LENGTH_SHORT).show()
+                }
+            } catch (e: Exception) {
+                Toast.makeText(this@MainActivity, "Error de red: ${e.message}", Toast.LENGTH_SHORT).show()
+            }
+        }
+    }
+
+    private fun startPollingImportStatus(deckCode: String) {
+        importJob?.cancel()
+        importJob = lifecycleScope.launch {
+            while (activeImports[deckCode] == "PROCESSING") {
+                kotlinx.coroutines.delay(3000) // Poll cada 3 seg
+                try {
+                    val response = RetrofitClient.instance.getImportStatus(deckCode)
+                    if (response.isSuccessful) {
+                        val status = response.body()?.status ?: "IDLE"
+                        activeImports[deckCode] = status
+                        if (status == "COMPLETED") {
+                            activeImports.remove(deckCode)
+                            updateFullCatalog(showToast = false) // Sincronizar automáticamente tras importación
+                            break
+                        } else if (status == "ERROR") {
+                            withContext(Dispatchers.Main) { refreshList() }
+                            break
+                        }
+                    }
+                } catch (e: Exception) {
+                    Log.e("WIKI", "Error polling status: ${e.message}")
+                }
+            }
+        }
+    }
+
+    private fun saveCustomCovers(deckCode: String, uris: List<android.net.Uri>) {
+        val userPrefs = getSharedPreferences("UserPrefs", Context.MODE_PRIVATE)
+        val userId = userPrefs.getInt("user_id", -1)
+        val userEmail = userPrefs.getString("user_email", "")
+        if (userId == -1) return
+
+        val isAdmin = userEmail == "admin"
+        val targetId = if (isAdmin) 0 else userId
+
+        lifecycleScope.launch(Dispatchers.IO) {
+            try {
+                // Ahora guardamos las imágenes en el servidor Postgres
+                val newPaths = mutableListOf<String>()
+
+                uris.forEachIndexed { index, uri ->
+                    val inputStream = contentResolver.openInputStream(uri)
+                    val bitmap = android.graphics.BitmapFactory.decodeStream(inputStream)
+                    
+                    val fileName = "cover_${if (isAdmin) "admin" else userId}_${deckCode.replace("-", "_")}_$index.jpg"
+                    val file = java.io.File(filesDir, fileName)
+                    val out = java.io.FileOutputStream(file)
+                    bitmap.compress(android.graphics.Bitmap.CompressFormat.JPEG, 90, out)
+                    out.close()
+                    
+                    // Guardar ruta en el servidor
+                    RetrofitClient.instance.saveCustomImage(SaveCustomImageRequest(
+                        user_id = targetId,
+                        deck_code = deckCode,
+                        image_path = file.absolutePath
+                    ))
+
+                    newPaths.add(file.absolutePath)
+                }
+
+                withContext(Dispatchers.Main) {
+                    if (isAdmin) {
+                        globalCoversCache[deckCode] = newPaths
+                    } else {
+                        customCoversCache[deckCode] = newPaths
+                    }
+                    refreshList()
+                    Toast.makeText(this@MainActivity, if (isAdmin) "Carátulas Globales actualizadas" else "Carátulas actualizadas", Toast.LENGTH_SHORT).show()
+                }
+            } catch (e: Exception) {
+                withContext(Dispatchers.Main) {
+                    Toast.makeText(this@MainActivity, "Error al guardar imágenes", Toast.LENGTH_SHORT).show()
+                }
+            }
         }
     }
 
     private fun refreshList() {
         listContainer.removeAllViews()
+        decksLoadedCount = 0
+        scrollView.setOnScrollChangeListener(null) // Limpiar listener previo
         val grouped = cardMap.entries.groupBy { getBaseCode(it.key) }
 
         if (isDeckViewMode && selectedCollection == null) {
@@ -496,7 +745,7 @@ class MainActivity : AppCompatActivity() {
         val toolbar = LinearLayout(this).apply {
             orientation = LinearLayout.HORIZONTAL
             gravity = Gravity.CENTER
-            setPadding(40, 20, 40, 20)
+            setPadding(40, 80, 40, 40) // Aumentado de 50 a 80 para bajar los botones
             layoutParams = LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT)
         }
 
@@ -592,15 +841,11 @@ class MainActivity : AppCompatActivity() {
     private fun renderDeckGallery(ownedDeckCodes: Set<String>) {
         lifecycleScope.launch {
             // 1. Obtener datos (Instantáneo por caché)
-            val allDecks = allDecksCache ?: withContext(Dispatchers.IO) {
-                val decks = AppDatabase.getDatabase(this@MainActivity).deckDao().getAllDecks()
-                allDecksCache = decks
-                decks
-            }
+            val allDecks = allDecksCache ?: emptyList()
 
             // APLICAR FILTRO DE PROPIEDAD
             var filteredDecks = if (showOnlyOwnedDecks) {
-                allDecks.filter { ownedDeckCodes.contains(it.codigoDeck) }
+                allDecks.filter { ownedDeckCodes.contains(it.codigoDeckSp) || ownedDeckCodes.contains(it.codigoDeckEn) }
             } else {
                 allDecks
             }
@@ -608,9 +853,9 @@ class MainActivity : AppCompatActivity() {
             val normalizedQuery = searchQuery.normalize()
             if (searchQuery.isNotEmpty()) {
                 filteredDecks = filteredDecks.filter { deck -> 
-                    val code = deck.codigoDeck ?: ""
-                    val name = deck.nombreDeck ?: ""
-                    code.normalize().contains(normalizedQuery) || name.normalize().contains(normalizedQuery)
+                    val code = (deck.codigoDeckSp ?: deck.codigoDeckEn ?: "").normalize()
+                    val name = (deck.nombreDeck ?: "").normalize()
+                    code.contains(normalizedQuery) || name.contains(normalizedQuery)
                 }
             }
 
@@ -620,75 +865,137 @@ class MainActivity : AppCompatActivity() {
                 setPadding(40, 20, 40, 20)
                 alignmentMode = GridLayout.ALIGN_BOUNDS
             }
+            listContainer.addView(gridLayout)
             
-            // Optimizaciones de bucle
             val itemWidth = resources.displayMetrics.widthPixels - 80
             val pkgName = packageName
             val res = resources
 
-            filteredDecks.forEach { deck ->
-                val collection = deck.codigoDeck ?: return@forEach
-                val name = deck.nombreDeck ?: "Colección"
-
-                val item = LinearLayout(this@MainActivity).apply {
-                    orientation = LinearLayout.VERTICAL
-                    gravity = Gravity.CENTER
-                    setPadding(30, 40, 30, 40)
-                    val shape = GradientDrawable().apply {
-                        setColor(colorHeaderBg)
-                        cornerRadius = 40f
-                        setStroke(2, colorTextGold)
-                    }
-                    background = shape
-                    layoutParams = GridLayout.LayoutParams().apply {
-                        width = itemWidth
-                        setMargins(0, 30, 0, 30)
-                    }
-                    setOnClickListener {
-                        selectedCollection = collection
-                        refreshList()
-                    }
-                }
-
-                val coverImage = ImageView(this@MainActivity).apply {
-                    layoutParams = LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, 800)
-                    scaleType = ImageView.ScaleType.FIT_CENTER
-                    
-                    // USAR CACHÉ DE IMAGEN (Mucho más rápido que getIdentifier)
-                    val cacheKey = collection.lowercase().replace("-", "_")
-                    val resId = resIdCache.getOrPut(cacheKey) {
-                        res.getIdentifier(cacheKey, "drawable", pkgName)
-                    }
-                    if (resId != 0) setImageResource(resId) else setImageResource(android.R.drawable.ic_menu_gallery)
-                }
+            fun loadNextBatch() {
+                if (decksLoadedCount >= filteredDecks.size) return
                 
-                // ... resto de textos ...
+                val nextBatch = filteredDecks.drop(decksLoadedCount).take(PAGE_SIZE)
+                nextBatch.forEach { deck ->
+                    val collection = deck.codigoDeckSp ?: deck.codigoDeckEn ?: return@forEach
+                    val name = deck.nombreDeck ?: "Colección"
 
-                val deckNameText = TextView(this@MainActivity).apply {
-                    text = name
-                    textSize = 18f
-                    setTextColor(Color.WHITE)
-                    setTypeface(null, android.graphics.Typeface.BOLD)
-                    gravity = Gravity.CENTER
-                    setPadding(20, 25, 20, 5)
-                    maxLines = 2
-                    ellipsize = android.text.TextUtils.TruncateAt.END
+                    val item = LinearLayout(this@MainActivity).apply {
+                        orientation = LinearLayout.VERTICAL
+                        gravity = Gravity.CENTER
+                        setPadding(30, 40, 30, 40)
+                        val shape = GradientDrawable().apply {
+                            setColor(colorHeaderBg)
+                            cornerRadius = 40f
+                            setStroke(2, colorTextGold)
+                        }
+                        background = shape
+                        layoutParams = GridLayout.LayoutParams().apply {
+                            width = itemWidth
+                            setMargins(0, 30, 0, 30)
+                        }
+                        setOnClickListener {
+                            selectedCollection = collection
+                            refreshList()
+                        }
+                    }
+
+                    val coverImage = ImageView(this@MainActivity).apply {
+                        layoutParams = LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, 800)
+                        scaleType = ImageView.ScaleType.FIT_CENTER
+                        
+                        val userImages = customCoversCache[collection]
+                        val globalImages = globalCoversCache[collection]
+                        
+                        val imagesToCycle = when {
+                            !userImages.isNullOrEmpty() -> userImages
+                            !globalImages.isNullOrEmpty() -> globalImages
+                            else -> null
+                        }
+
+                        if (imagesToCycle != null) {
+                            if (imagesToCycle.size == 1) {
+                                Glide.with(this@MainActivity).load(imagesToCycle[0]).into(this)
+                            } else {
+                                var currentIndex = 0
+                                val runCycle = object : Runnable {
+                                    override fun run() {
+                                        if (ViewCompat.isAttachedToWindow(this@apply)) {
+                                            Glide.with(this@MainActivity)
+                                                .load(imagesToCycle[currentIndex])
+                                                .transition(com.bumptech.glide.load.resource.drawable.DrawableTransitionOptions.withCrossFade())
+                                                .into(this@apply)
+                                            
+                                            currentIndex = (currentIndex + 1) % imagesToCycle.size
+                                            postDelayed(this, 10000)
+                                        }
+                                    }
+                                }
+                                post(runCycle)
+                            }
+                        } else {
+                            val cacheKey = collection.lowercase().replace("-", "_")
+                            val resId = resIdCache.getOrPut(cacheKey) {
+                                res.getIdentifier(cacheKey, "drawable", pkgName)
+                            }
+                            if (resId != 0) setImageResource(resId) else setImageResource(android.R.drawable.ic_menu_gallery)
+                        }
+                    }
+                    
+                    val deckNameText = TextView(this@MainActivity).apply {
+                        text = name
+                        textSize = 18f
+                        setTextColor(Color.WHITE)
+                        setTypeface(null, android.graphics.Typeface.BOLD)
+                        gravity = Gravity.CENTER
+                        setPadding(20, 25, 20, 5)
+                        maxLines = 2
+                        ellipsize = android.text.TextUtils.TruncateAt.END
+                    }
+
+                    val deckCodeText = TextView(this@MainActivity).apply {
+                        text = collection
+                        textSize = 14f
+                        setTextColor(colorTextGold)
+                        gravity = Gravity.CENTER
+                        setPadding(0, 0, 0, 10)
+                    }
+
+                    if (showProgress) {
+                        val totalOwned = cardMap.entries.filter { getBaseCode(it.key) == collection }.sumOf { it.value }
+                        val totalInDeck = deckTotalsCache[collection] ?: 0
+                        
+                        if (totalInDeck > 0) {
+                            val progressText = TextView(this@MainActivity).apply {
+                                text = "$totalOwned / $totalInDeck"
+                                textSize = 12f
+                                setTextColor(colorTextLight)
+                                setTypeface(null, android.graphics.Typeface.BOLD)
+                                gravity = Gravity.CENTER
+                                setPadding(0, 5, 0, 10)
+                            }
+                            item.addView(progressText)
+                        }
+                    }
+
+                    item.addView(coverImage)
+                    item.addView(deckNameText)
+                    item.addView(deckCodeText)
+                    gridLayout.addView(item)
                 }
-
-                val deckCodeText = TextView(this@MainActivity).apply {
-                    text = collection
-                    textSize = 14f
-                    setTextColor(colorTextGold)
-                    gravity = Gravity.CENTER
-                    setPadding(0, 0, 0, 10)
-                }
-
-                item.addView(coverImage)
-                item.addView(deckNameText)
-                item.addView(deckCodeText)
-                gridLayout.addView(item)
+                decksLoadedCount += nextBatch.size
             }
-            listContainer.addView(gridLayout)
+
+            // Carga inicial
+            loadNextBatch()
+
+            // Listener de scroll para carga infinita
+            scrollView.setOnScrollChangeListener { v, _, scrollY, _, _ ->
+                val view = v as ScrollView
+                val contentHeight = view.getChildAt(0).height
+                if (scrollY + view.height > contentHeight - 1000) {
+                    loadNextBatch()
+                }
+            }
         }
     }
 
@@ -749,11 +1056,26 @@ class MainActivity : AppCompatActivity() {
             layoutParams = LinearLayout.LayoutParams(buttonSize, buttonSize)
             setPadding(20, 20, 20, 20)
             setOnClickListener { view -> 
+                val userPrefs = getSharedPreferences("UserPrefs", Context.MODE_PRIVATE)
+                val isAdmin = userPrefs.getString("user_email", "") == "admin"
+
                 val popup = PopupMenu(this@MainActivity, view)
                 popup.menu.add("Compartir esta lista")
                 popup.menu.add("Marcar todo como obtenido")
+                popup.menu.add("Cambiar carátula de baraja")
+                
+                if (isAdmin) {
+                    popup.menu.add("Importar nombres desde Wiki")
+                    popup.menu.add("Editar código de baraja")
+                }
+                
                 popup.setOnMenuItemClickListener { item ->
-                    Toast.makeText(this@MainActivity, "Opción: ${item.title}", Toast.LENGTH_SHORT).show()
+                    when (item.title) {
+                        "Cambiar carátula de baraja" -> pickCustomCover(collection)
+                        "Importar nombres desde Wiki" -> importDeckWiki(collection)
+                        "Editar código de baraja" -> showEditDeckCodeDialog(collection)
+                        else -> Toast.makeText(this@MainActivity, "Opción: ${item.title}", Toast.LENGTH_SHORT).show()
+                    }
                     true
                 }
                 popup.show()
@@ -765,19 +1087,63 @@ class MainActivity : AppCompatActivity() {
         headerBar.addView(menuBtn)
         listContainer.addView(headerBar)
 
+        // --- 🔄 PANEL DE PROGRESO DE IMPORTACIÓN ---
+        val currentStatus = activeImports[collection]
+        if (currentStatus != null && currentStatus != "IDLE") {
+            val progressLayout = LinearLayout(this).apply {
+                orientation = LinearLayout.VERTICAL
+                gravity = Gravity.CENTER
+                setPadding(40, 0, 40, 20)
+                layoutParams = LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT)
+            }
+
+            if (currentStatus == "PROCESSING") {
+                val loadingTxt = TextView(this).apply {
+                    text = "Buscando cartas en la Wiki..."
+                    textSize = 12f
+                    setTextColor(colorTextGold)
+                    setPadding(0, 0, 0, 10)
+                }
+                val pBar = ProgressBar(this, null, android.R.attr.progressBarStyleHorizontal).apply {
+                    isIndeterminate = true
+                    layoutParams = LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, 15)
+                }
+                progressLayout.addView(loadingTxt)
+                progressLayout.addView(pBar)
+            } else if (currentStatus == "ERROR") {
+                val errorTxt = TextView(this).apply {
+                    text = "No se encontraron datos en la Wiki o hubo un error."
+                    textSize = 12f
+                    setTextColor(Color.parseColor("#F44336")) // Rojo error
+                    setPadding(0, 0, 0, 10)
+                    gravity = Gravity.CENTER
+                }
+                val retryBtn = Button(this).apply {
+                    text = "REINTENTAR"
+                    setBackgroundColor(Color.parseColor("#22F44336"))
+                    setTextColor(Color.parseColor("#F44336"))
+                    setOnClickListener {
+                        activeImports.remove(collection)
+                        importDeckWiki(collection)
+                    }
+                }
+                progressLayout.addView(errorTxt)
+                progressLayout.addView(retryBtn)
+            }
+            listContainer.addView(progressLayout)
+        }
+
         lifecycleScope.launch {
-            val db = AppDatabase.getDatabase(this@MainActivity).deckDao()
-            
             // 1. Cargar nombre de la baraja
-            val name = withContext(Dispatchers.IO) { db.getDeckName(collection) }
-            nameText.text = name ?: "Colección"
+            val currentDeck = allDecksCache?.find { it.codigoDeckSp == collection || it.codigoDeckEn == collection }
+            nameText.text = currentDeck?.nombreDeck ?: "Colección"
             codeText.text = collection
 
-            // 2. Cargar TODAS las cartas que pertenecen a esta baraja
-            val allCardsInDb = withContext(Dispatchers.IO) { db.getAllCardsInDeck(collection) }
+            // 2. Cargar TODAS las cartas que pertenecen a esta baraja desde la caché en memoria
+            val allCardsInDeck = allCardDetailsCache?.filter { it.codigoDeckSp == collection } ?: emptyList()
             
-            // 2.5 Actualizar caché de nombres para TODAS las cartas de este deck (incluyendo las que faltan)
-            allCardsInDb.forEach { card ->
+            // 2.5 Asegurar que los nombres estén en la caché
+            allCardsInDeck.forEach { card ->
                 val code = card.deckCardId ?: ""
                 val name = card.nombreCarta ?: ""
                 if (code.isNotEmpty()) cardNamesCache[code] = name
@@ -790,7 +1156,7 @@ class MainActivity : AppCompatActivity() {
             listContainer.addView(gridLayout)
 
             // 3. Preparar lista combinada (lo que tengo vs lo que hay)
-            val combinedList = allCardsInDb.map { dbCard ->
+            val combinedList = allCardsInDeck.map { dbCard ->
                 val code = dbCard.deckCardId ?: ""
                 val count = cardMap[code] ?: 0
                 Pair(code, count)
@@ -870,12 +1236,11 @@ class MainActivity : AppCompatActivity() {
             listContainer.addView(headerContainer)
 
             lifecycleScope.launch {
-                val deckName = withContext(Dispatchers.IO) {
-                    AppDatabase.getDatabase(this@MainActivity).deckDao().getDeckName(collection)
-                }
+                val deckName = deckNamesCache[collection] ?: allDecksCache?.find { it.codigoDeckSp == collection || it.codigoDeckEn == collection }?.nombreDeck
                 if (deckName != null) {
                     headerText.text = "$collection: $deckName"
                     headerText.setTextColor(Color.WHITE)
+                    deckNamesCache[collection] = deckName
                 }
             }
 
@@ -984,10 +1349,10 @@ class MainActivity : AppCompatActivity() {
         }
 
         lifecycleScope.launch {
-            val cardName = withContext(Dispatchers.IO) { AppDatabase.getDatabase(this@MainActivity).deckDao().getCardName(code) }
+            val cardName = cardNamesCache[code] ?: allCardDetailsCache?.find { it.deckCardId == code }?.nombreCarta
             if (cardName != null) {
                 textName.text = cardName
-                val imageUrl = withContext(Dispatchers.IO) { AppDatabase.getDatabase(this@MainActivity).deckDao().getCardImageUrl(cardName) }
+                val imageUrl = allCardImagesCache?.find { it.nombreEs == cardName }?.imageUrl
                 if (!imageUrl.isNullOrEmpty()) {
                     Glide.with(this@MainActivity).load(imageUrl).into(imageView)
                 }
@@ -1156,6 +1521,19 @@ class MainActivity : AppCompatActivity() {
             gravity = Gravity.CENTER
         }
 
+        val adminApiLink = TextView(this).apply {
+            val userPrefs = getSharedPreferences("UserPrefs", Context.MODE_PRIVATE)
+            val isAdmin = userPrefs.getString("user_email", "") == "admin"
+            visibility = if (isAdmin) View.VISIBLE else View.GONE
+            
+            text = "🔗 VER EN API YGOPRO"
+            textSize = 12f
+            setTextColor(Color.parseColor("#4FC3F7")) // Azul claro link
+            setPadding(0, 0, 0, 30)
+            gravity = Gravity.CENTER
+            setTypeface(null, android.graphics.Typeface.BOLD)
+        }
+
         val matchesTitle = TextView(this).apply {
             text = "ENCUENTRA ESTA CARTA TAMBIÉN EN:"
             textSize = 11f
@@ -1178,16 +1556,25 @@ class MainActivity : AppCompatActivity() {
         sheetContainer.addView(handle)
         sheetContainer.addView(sheetTitle)
         sheetContainer.addView(priceInfoText)
+        sheetContainer.addView(adminApiLink)
         sheetContainer.addView(matchesTitle)
         sheetContainer.addView(horizontalScroll)
 
         fun updateCollectionsForCard(cardCode: String) {
             collectionsList.removeAllViews()
             lifecycleScope.launch {
-                val db = AppDatabase.getDatabase(this@MainActivity).deckDao()
-                val nameEs = withContext(Dispatchers.IO) { db.getCardName(cardCode) } ?: return@launch
-                val nameEn = withContext(Dispatchers.IO) { db.getCardNameEn(nameEs) }
+                val nameEs = cardNamesCache[cardCode] ?: allCardDetailsCache?.find { it.deckCardId == cardCode }?.nombreCarta ?: return@launch
+                val nameEn = allCardImagesCache?.find { it.nombreEs == nameEs }?.nombreEn
                 
+                // 🛠️ Actualizar Link Admin
+                if (nameEn != null) {
+                    adminApiLink.setOnClickListener {
+                        val url = "https://db.ygoprodeck.com/api/v7/cardinfo.php?name=${URLEncoder.encode(nameEn, "UTF-8")}"
+                        val intent = Intent(Intent.ACTION_VIEW, android.net.Uri.parse(url))
+                        startActivity(intent)
+                    }
+                }
+
                 // 💰 Actualizar Precio en el Sheet
                 val price = if (nameEn != null) fetchCardPrice(cardCode, nameEn) else "N/A"
                 priceInfoText.text = if (price.contains(cardCode)) price else "Precio ($cardCode): $price"
@@ -1195,7 +1582,7 @@ class MainActivity : AppCompatActivity() {
                 // 🔍 Buscar en qué otras colecciones del usuario aparece esta misma carta (por nombre)
                 val matches = mutableSetOf<String>()
                 cardMap.keys.forEach { code ->
-                    val name = withContext(Dispatchers.IO) { db.getCardName(code) }
+                    val name = cardNamesCache[code] ?: allCardDetailsCache?.find { it.deckCardId == code }?.nombreCarta
                     if (name == nameEs) {
                         matches.add(getBaseCode(code))
                     }
@@ -1243,10 +1630,8 @@ class MainActivity : AppCompatActivity() {
             
             imageView.animate().alpha(0f).setDuration(100).withEndAction {
                 lifecycleScope.launch {
-                    val db = AppDatabase.getDatabase(this@MainActivity).deckDao()
-                    val nameEs = withContext(Dispatchers.IO) { db.getCardName(code) }
-                    
-                    val url = withContext(Dispatchers.IO) { if (nameEs != null) db.getCardImageUrl(nameEs) else null }
+                    val nameEs = allCardDetailsCache?.find { it.deckCardId == code }?.nombreCarta
+                    val url = allCardImagesCache?.find { it.nombreEs == nameEs }?.imageUrl
                     
                     infoText.text = if (nameEs != null) "$code: $nameEs" else code
                     
@@ -1418,31 +1803,145 @@ class MainActivity : AppCompatActivity() {
         }
     }
 
-    private fun getBaseCode(code: String): String {
-        if (!code.contains("-")) return code // Caso como 23PP
-        
-        val parts = code.split("-")
-        if (parts.size < 2) return parts[0]
-        
-        // Si la segunda parte empieza por letras (ej: SP178), extraemos las letras
-        val secondPart = parts[1]
-        val lettersInSecondPart = secondPart.takeWhile { it.isLetter() }
-        
-        return if (lettersInSecondPart.isNotEmpty()) {
-            "${parts[0]}-$lettersInSecondPart" // Retorna RA03-SP
-        } else {
-            parts[0] // Retorna LOB (de LOB-001)
+    private fun updateFullCatalog(showToast: Boolean = true) {
+        lifecycleScope.launch {
+            try {
+                // 1. CARGA DESDE CACHÉ LOCAL (ARCHIVO) - ¡INSTANTÁNEO!
+                if (allDecksCache == null) {
+                    val cachedCatalog = withContext(Dispatchers.IO) { loadCatalogFromDisk() }
+                    if (cachedCatalog != null) {
+                        Log.i("CACHE", "Cargando catálogo TCG $tcgId desde archivo local...")
+                        applyCatalogToMemory(cachedCatalog)
+                        updateCachesAndRefresh()
+                    }
+                }
+
+                if (showToast) Toast.makeText(this@MainActivity, "Sincronizando...", Toast.LENGTH_SHORT).show()
+                
+                val response = RetrofitClient.instance.getFullCatalog(tcgId)
+                if (response.isSuccessful) {
+                    val catalog = response.body()
+                    if (catalog != null) {
+                        // 2. Guardamos en memoria
+                        applyCatalogToMemory(catalog)
+                        
+                        // 3. Guardamos en DISCO para la próxima vez
+                        withContext(Dispatchers.IO) { saveCatalogToDisk(catalog) }
+                        
+                        // 4. Refrescamos la UI con los datos frescos del servidor
+                        updateCachesAndRefresh()
+                        
+                        if (showToast) Toast.makeText(this@MainActivity, "Catálogo actualizado", Toast.LENGTH_SHORT).show()
+                    }
+                }
+            } catch (e: Exception) {
+                Log.e("SYNC", "Error en sincronización: ${e.message}")
+            }
         }
     }
 
+    private fun applyCatalogToMemory(catalog: CatalogResponse) {
+        allDecksCache = catalog.decks
+        allCardDetailsCache = catalog.card_decks
+        allCardImagesCache = catalog.cards
+        
+        // Repoblar cachés rápidas
+        allDecksCache?.forEach { deckNamesCache[it.codigoDeckSp ?: ""] = it.nombreDeck ?: "" }
+        allCardDetailsCache?.forEach { cardNamesCache[it.deckCardId ?: ""] = it.nombreCarta ?: "" }
+        allCardIdsCache = allCardDetailsCache?.mapNotNull { it.deckCardId }?.toSet()
+        deckTotalsCache.clear()
+    }
+
+    private fun saveCatalogToDisk(catalog: CatalogResponse) {
+        try {
+            val json = Gson().toJson(catalog)
+            val file = java.io.File(filesDir, "catalog_cache_$tcgId.json")
+            file.writeText(json)
+            Log.i("CACHE", "Catálogo TCG $tcgId guardado en disco")
+        } catch (e: Exception) {
+            Log.e("CACHE", "Error al guardar: ${e.message}")
+        }
+    }
+
+    private fun loadCatalogFromDisk(): CatalogResponse? {
+        return try {
+            val file = java.io.File(filesDir, "catalog_cache_$tcgId.json")
+            if (file.exists()) {
+                val json = file.readText()
+                Gson().fromJson(json, CatalogResponse::class.java)
+            } else null
+        } catch (e: Exception) {
+            Log.e("CACHE", "Error al cargar: ${e.message}")
+            null
+        }
+    }
+
+    private fun getBaseCode(code: String): String {
+        // 1. Intentar match con códigos Reales de la Base de Datos (Prioridad Máxima)
+        // Buscamos tanto en códigos SP como EN
+        val allDecks = allDecksCache ?: emptyList()
+        
+        // Probamos match con código español
+        val bestMatchSp = allDecks.mapNotNull { it.codigoDeckSp }.filter { code.startsWith(it) }.maxByOrNull { it.length }
+        if (bestMatchSp != null) return bestMatchSp
+
+        // Probamos match con código inglés
+        val bestMatchEn = allDecks.mapNotNull { it.codigoDeckEn }.filter { code.startsWith(it) }.maxByOrNull { it.length }
+        if (bestMatchEn != null) return bestMatchEn
+
+        // 2. Fallback: Lógica por guion (si la baraja aún no está en el catálogo)
+        if (code.contains("-")) {
+            val parts = code.split("-")
+            if (parts.size < 2) return parts[0]
+            
+            val secondPart = parts[1]
+            val lettersInSecondPart = secondPart.takeWhile { it.isLetter() }
+            
+            return if (lettersInSecondPart.isNotEmpty()) {
+                "${parts[0]}-$lettersInSecondPart"
+            } else {
+                parts[0]
+            }
+        }
+        
+        return code
+    }
+
     private fun extractNumber(code: String): Int {
-        val regex = Regex("(\\d{3})$")
+        val regex = Regex("(\\d{3,4})$")
         return regex.find(code)?.value?.toIntOrNull() ?: Int.MAX_VALUE
+    }
+
+    private fun cleanCodeForPrice(code: String): String {
+        // La API de YGOPRODeck ignora guiones y sufijos de idioma.
+        // Pero hay que tener cuidado de no quitar letras que son parte del SET (como la J en SDJ).
+        
+        // 1. Quitar guion y pasar a mayúsculas
+        var clean = code.uppercase().replace("-", "")
+        
+        // 2. Quitar indicadores de idioma específicos si están al final del bloque de letras
+        // Ej: BIJS007 -> BIJ007, LOBEN038 -> LOB038
+        // Buscamos Letras + (Idioma) + Números
+        val languagePatterns = listOf("SP", "EN", "IT", "DE", "FR", "PT", "JP", "KR", "E", "S")
+        
+        for (lang in languagePatterns) {
+            val pattern = Regex("^([A-Z]+)($lang)([0-9]+)$")
+            val match = pattern.find(clean)
+            if (match != null) {
+                clean = match.groupValues[1] + match.groupValues[3]
+                break
+            }
+        }
+        
+        Log.i("PRICE_CHECK", "cleanCodeForPrice: $code -> $clean")
+        return clean
     }
 
     private suspend fun fetchCardPrice(cardCode: String, cardNameEn: String): String {
         val cacheKey = "${cardNameEn}_$cardCode"
         if (priceCache.containsKey(cacheKey)) return priceCache[cacheKey]!!
+        
+        Log.i("PRICE_CHECK", "--- Iniciando búsqueda para: $cardNameEn ($cardCode) ---")
         
         return withContext(Dispatchers.IO) {
             try {
@@ -1452,34 +1951,151 @@ class MainActivity : AppCompatActivity() {
                 val json = JSONObject(response)
                 val cardData = json.getJSONArray("data").getJSONObject(0)
                 
-                // Buscamos específicamente el set que coincida con nuestro código
-                val cardSets = cardData.optJSONArray("card_sets")
-                var versionPrice = "N/A"
+                // 1. DETERMINAR EL CÓDIGO OBJETIVO EN INGLÉS
+                // Buscamos el deck que mejor coincida con el prefijo del código de la carta
+                Log.i("PRICE_CHECK", "Buscando coincidencia en allDecksCache (${allDecksCache?.size ?: 0} decks)")
                 
-                if (cardSets != null) {
-                    for (i in 0 until cardSets.length()) {
-                        val set = cardSets.getJSONObject(i)
-                        val setCode = set.getString("set_code")
-                        if (setCode.equals(cardCode, ignoreCase = true)) {
-                            // En YGOProDECK, a veces el precio de cardmarket está dentro del set info
-                            // Si no, recurrimos al precio general del set
-                            versionPrice = set.optString("set_price", "N/A")
-                            if (versionPrice != "N/A") versionPrice += " €"
-                            break
-                        }
-                    }
-                }
-                
-                // Si no encontramos el precio específico del set, usamos el de cardmarket general como fallback
-                if (versionPrice == "N/A") {
-                    val prices = cardData.getJSONArray("card_prices").getJSONObject(0)
-                    versionPrice = prices.getString("cardmarket_price") + " €"
+                var matchingDeck = allDecksCache?.filter { 
+                    val sp = it.codigoDeckSp
+                    val en = it.codigoDeckEn
+                    (sp != null && cardCode.startsWith(sp)) || (en != null && cardCode.startsWith(en))
+                }?.maxByOrNull { 
+                    val sp = it.codigoDeckSp
+                    val en = it.codigoDeckEn
+                    if (sp != null && cardCode.startsWith(sp)) sp.length 
+                    else en?.length ?: 0
                 }
 
-                priceCache[cacheKey] = versionPrice
-                versionPrice
+                // EMERGENCY MAPPING: Si no viene en el catálogo o viene sin EN
+                if (matchingDeck == null || matchingDeck.codigoDeckEn == null) {
+                    if (cardCode.startsWith("BIJ-S")) {
+                        Log.i("PRICE_CHECK", "Emergency Mapping detectado: BIJ-S -> SDJ-")
+                        matchingDeck = Deck(null, "BIJ-S", "SDJ-", "Starter Deck Joey")
+                    }
+                }
+
+                val targetCode = if (matchingDeck != null) {
+                    val sp = matchingDeck.codigoDeckSp
+                    val en = matchingDeck.codigoDeckEn
+                    Log.i("PRICE_CHECK", "Deck encontrado: SP=$sp, EN=$en")
+                    if (sp != null && cardCode.startsWith(sp) && en != null) {
+                        val replaced = cardCode.replace(sp, en)
+                        Log.i("PRICE_CHECK", "Reemplazo realizado: $cardCode -> $replaced")
+                        replaced
+                    } else {
+                        Log.i("PRICE_CHECK", "No se requiere reemplazo (ya es inglés o falta código EN)")
+                        cardCode
+                    }
+                } else {
+                    Log.i("PRICE_CHECK", "No se encontró deck coincidente para el prefijo")
+                    cardCode
+                }
+
+                val cleanUserCode = cleanCodeForPrice(cardCode)
+                val cleanEnglishCode = cleanCodeForPrice(targetCode)
+                
+                Log.i("PRICE_CHECK", "Código usuario: $cardCode -> Limpio: $cleanUserCode")
+                Log.i("PRICE_CHECK", "Código objetivo: $targetCode -> Limpio: $cleanEnglishCode")
+
+                // 2. INTENTO BUSCAR PRECIO ESPECÍFICO DEL SET
+                val cardSets = cardData.optJSONArray("card_sets")
+                var versionPrice: String? = null
+                
+                if (cardSets != null) {
+                    Log.i("PRICE_CHECK", "Analizando ${cardSets.length()} sets de la API")
+                    for (i in 0 until cardSets.length()) {
+                        val set = cardSets.getJSONObject(i)
+                        val apiSetCode = set.getString("set_code")
+                        val cleanApiCode = cleanCodeForPrice(apiSetCode)
+                        val price = set.optString("set_price", "0.00")
+                        
+                        // Buscamos match con el código limpio español O el inglés
+                        val isMatch = cleanApiCode == cleanUserCode || cleanApiCode == cleanEnglishCode
+                        Log.i("PRICE_CHECK", "API Set: $apiSetCode (Limpio: $cleanApiCode) | Price: $price | Match: $isMatch")
+                        
+                        if (isMatch) {
+                            if (price != "N/A" && price != "0.00") {
+                                Log.i("PRICE_CHECK", "¡MATCH ENCONTRADO! Precio: $price €")
+                                versionPrice = "$price €"
+                                break
+                            } else {
+                                Log.i("PRICE_CHECK", "Match encontrado pero sin precio (0.00)")
+                            }
+                        }
+                    }
+                } else {
+                    Log.i("PRICE_CHECK", "La API no devolvió 'card_sets'")
+                }
+                
+                // 3. FALLBACK A PRECIO GENERAL SI NO HAY DEL SET
+                val finalPrice = if (versionPrice != null) {
+                    versionPrice
+                } else {
+                    val prices = cardData.getJSONArray("card_prices").getJSONObject(0)
+                    val cardmarketPrice = prices.optString("cardmarket_price", "N/A")
+                    Log.i("PRICE_CHECK", "Usando precio fallback: $cardmarketPrice")
+                    if (cardmarketPrice != "N/A" && cardmarketPrice != "0.00") "$cardmarketPrice € (General)" else "N/A"
+                }
+
+                priceCache[cacheKey] = finalPrice
+                finalPrice
             } catch (e: Exception) {
+                Log.e("PRICE_CHECK", "Error en fetchCardPrice: ${e.message}")
                 "N/A"
+            }
+        }
+    }
+
+    private fun exportCollectionToCSV() {
+        if (cardMap.isEmpty()) {
+            Toast.makeText(this, "La colección está vacía", Toast.LENGTH_SHORT).show()
+            return
+        }
+
+        lifecycleScope.launch {
+            Toast.makeText(this@MainActivity, "Generando CSV con precios... esto puede tardar", Toast.LENGTH_LONG).show()
+            
+            val csvBuilder = StringBuilder()
+            // 🛡️ Añadir BOM (Byte Order Mark) para que Excel reconozca UTF-8 (acentos y ñ)
+            csvBuilder.append('\uFEFF')
+            // 📊 Usar punto y coma (;) como separador, que es el estándar en Excel para España/Europa
+            csvBuilder.append("Codigo;Nombre;Cantidad;Precio Individual;Subtotal\n")
+
+            withContext(Dispatchers.IO) {
+                cardMap.toSortedMap().forEach { (code, count) ->
+                    val nameEs = cardNamesCache[code] ?: allCardDetailsCache?.find { it.deckCardId == code }?.nombreCarta ?: "Desconocida"
+                    val nameEn = allCardImagesCache?.find { it.nombreEs == nameEs }?.nombreEn
+                    
+                    val priceStr = if (nameEn != null) fetchCardPrice(code, nameEn) else "N/A"
+                    val priceClean = priceStr.replace(" €", "")
+                        .replace(" (General)", "")
+                        .replace(",", ".")
+                        .toDoubleOrNull() ?: 0.0
+                    val subtotal = priceClean * count
+                    
+                    // Escapar punto y coma en nombres si existen
+                    val safeName = nameEs.replace(";", ",")
+                    
+                    csvBuilder.append("$code;$safeName;$count;$priceStr;${String.format("%.2f", subtotal)} €\n")
+                }
+            }
+
+            try {
+                val file = java.io.File(cacheDir, "MiColeccion_TCG.csv")
+                file.writeText(csvBuilder.toString())
+                
+                val uri = FileProvider.getUriForFile(this@MainActivity, "$packageName.fileprovider", file)
+                
+                val intent = Intent(Intent.ACTION_SEND).apply {
+                    type = "text/csv"
+                    putExtra(Intent.EXTRA_SUBJECT, "Mi Colección TCG")
+                    putExtra(Intent.EXTRA_STREAM, uri)
+                    addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
+                }
+                
+                startActivity(Intent.createChooser(intent, "Compartir Colección"))
+            } catch (e: Exception) {
+                Toast.makeText(this@MainActivity, "Error al crear el archivo: ${e.message}", Toast.LENGTH_SHORT).show()
             }
         }
     }

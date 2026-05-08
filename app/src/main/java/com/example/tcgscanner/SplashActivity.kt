@@ -9,13 +9,10 @@ import android.view.animation.AccelerateDecelerateInterpolator
 import android.widget.FrameLayout
 import android.widget.ImageView
 import android.widget.TextView
-import android.widget.Toast
 import androidx.appcompat.app.AppCompatActivity
 import androidx.lifecycle.lifecycleScope
-import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
-import kotlinx.coroutines.withContext
 
 class SplashActivity : AppCompatActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
@@ -39,7 +36,7 @@ class SplashActivity : AppCompatActivity() {
         }
 
         val statusText = TextView(this).apply {
-            text = "Buscando actualizaciones..."
+            text = "TCG SCANNER"
             setTextColor(Color.parseColor("#8892B0"))
             textSize = 12f
             gravity = Gravity.CENTER
@@ -63,40 +60,15 @@ class SplashActivity : AppCompatActivity() {
             .start()
 
         lifecycleScope.launch {
-            // 1. Sincronizar catálogo maestro en segundo plano
-            try {
-                val response = RetrofitClient.instance.getFullCatalog()
-                if (response.isSuccessful && response.body() != null) {
-                    val catalog = response.body()!!
-                    val db = AppDatabase.getDatabase(this@SplashActivity).deckDao()
-                    
-                    withContext(Dispatchers.IO) {
-                        // Limpiamos los códigos de barajas antes de insertar los nuevos
-                        // para evitar conflictos con IDs manuales repetidos en Postgres
-                        db.clearDecks()
+            // El catálogo ahora se carga directamente en MainActivity para asegurar que esté en memoria
+            delay(1500)
 
-                        db.insertDecks(catalog.decks)
-                        db.insertCards(catalog.cards)
-                        db.insertCardDetails(catalog.card_decks)
-                    }
-                    statusText.text = "Catálogo actualizado (${catalog.cards.size} cartas)"
-                } else {
-                    statusText.text = "Error de servidor: ${response.code()}"
-                }
-            } catch (e: Exception) {
-                e.printStackTrace()
-                statusText.text = "Modo offline (Error: ${e.message})"
-            }
-
-            // 2. Esperar un poco para que se vea el logo
-            delay(1000)
-
-            // 3. Decidir a qué pantalla ir
+            // Decidir a qué pantalla ir
             val prefs = getSharedPreferences("UserPrefs", MODE_PRIVATE)
             val userId = prefs.getInt("user_id", -1)
 
             val nextIntent = if (userId != -1) {
-                Intent(this@SplashActivity, MainActivity::class.java)
+                Intent(this@SplashActivity, TCGSelectionActivity::class.java)
             } else {
                 Intent(this@SplashActivity, LoginActivity::class.java)
             }

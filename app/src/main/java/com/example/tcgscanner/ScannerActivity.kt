@@ -6,13 +6,22 @@ import android.content.Context
 import android.content.Intent
 import android.content.pm.PackageManager
 import android.graphics.Color
+import android.graphics.PorterDuff
 import android.graphics.drawable.GradientDrawable
 import android.os.Bundle
 import android.util.Log
 import android.view.Gravity
 import android.view.View
 import android.view.ViewGroup
+import android.view.HapticFeedbackConstants
+import android.os.Vibrator
+import android.os.VibrationEffect
+import android.os.Build
 import android.widget.*
+import com.google.android.gms.common.moduleinstall.ModuleInstall
+import com.google.android.gms.common.moduleinstall.ModuleInstallRequest
+import com.google.android.gms.common.moduleinstall.InstallStatusListener
+import com.google.android.gms.common.moduleinstall.ModuleInstallStatusUpdate
 import androidx.annotation.OptIn
 import androidx.appcompat.app.AppCompatActivity
 import androidx.camera.camera2.interop.ExperimentalCamera2Interop
@@ -45,6 +54,10 @@ class ScannerActivity : AppCompatActivity() {
     private lateinit var sliderY: Slider
     private lateinit var sliderSize: Slider
 
+    private lateinit var loadingOverlay: LinearLayout
+    private lateinit var progressBar: ProgressBar
+    private lateinit var loadingText: TextView
+
     private var camera: Camera? = null
     private lateinit var cameraExecutor: ExecutorService
 
@@ -54,6 +67,7 @@ class ScannerActivity : AppCompatActivity() {
 
     private val scannedCards = ArrayList<String>()
     private var lastSavedCard: String? = null
+    private val resetLastCardRunnable = Runnable { lastSavedCard = null }
 
     // Colores del tema Midnight
     private val colorMidnight = Color.parseColor("#0A192F")
@@ -74,9 +88,8 @@ class ScannerActivity : AppCompatActivity() {
 
         loadAllSettings()
 
-        // Cargar la última carta guardada para ignorarla al inicio
-        val prefs = getSharedPreferences("OverlayPrefs", Context.MODE_PRIVATE)
-        lastSavedCard = prefs.getString("lastSavedCard", null)
+        // RESET DE MEMORIA: Al abrir el scanner, olvidamos la última carta de la sesión anterior
+        lastSavedCard = null 
 
         txtLastCode = TextView(this).apply {
             text = "Esperando código..."
@@ -210,15 +223,94 @@ class ScannerActivity : AppCompatActivity() {
             ).apply { topMargin = 120 }
         )
 
+        // --- ⏳ PANTALLA DE CARGA ML KIT ---
+        loadingOverlay = LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+            gravity = Gravity.CENTER
+            setBackgroundColor(Color.parseColor("#EE0A192F")) // Fondo Midnight casi opaco
+            visibility = View.GONE
+            
+            progressBar = ProgressBar(this@ScannerActivity).apply {
+                indeterminateDrawable.setColorFilter(colorGold, PorterDuff.Mode.SRC_IN)
+            }
+            
+            loadingText = TextView(this@ScannerActivity).apply {
+                text = "Iniciando motor de IA..."
+                setTextColor(Color.WHITE)
+                textSize = 16f
+                setPadding(0, 40, 0, 0)
+                gravity = Gravity.CENTER
+            }
+            
+            addView(progressBar)
+            addView(loadingText)
+        }
+        
+        mainContainer.addView(loadingOverlay, FrameLayout.LayoutParams(
+            FrameLayout.LayoutParams.MATCH_PARENT,
+            FrameLayout.LayoutParams.MATCH_PARENT
+        ))
+
         cameraExecutor = Executors.newSingleThreadExecutor()
 
         if (allPermissionsGranted()) {
-            startCamera()
+            checkMLKitResources()
         } else {
             ActivityCompat.requestPermissions(
                 this, REQUIRED_PERMISSIONS, REQUEST_CODE_PERMISSIONS
             )
         }
+    }
+
+    private fun checkMLKitResources() {
+        val moduleInstallClient = ModuleInstall.getClient(this)
+        val optionalModuleApi = com.google.mlkit.vision.text.TextRecognition.getClient(com.google.mlkit.vision.text.latin.TextRecognizerOptions.DEFAULT_OPTIONS)
+
+        moduleInstallClient.areModulesAvailable(optionalModuleApi)
+            .addOnSuccessListener { response ->
+                if (response.areModulesAvailable()) {
+                    startCamera()
+                } else {
+                    loadingOverlay.visibility = View.VISIBLE
+                    loadingText.text = "Descargando componentes de IA...\n(Esto solo ocurre la primera vez)"
+
+                    val listener = InstallStatusListener { update ->
+                        val progress = update.progressInfo
+                        if (progress != null) {
+                            val percent = (progress.bytesDownloaded * 100 / progress.totalBytesToDownload).toInt()
+                            runOnUiThread {
+                                loadingText.text = "Descargando componentes de IA: $percent%\n(Esto solo ocurre la primera vez)"
+                            }
+                        }
+                        if (update.installState == ModuleInstallStatusUpdate.InstallState.STATE_COMPLETED) {
+                            runOnUiThread {
+                                loadingOverlay.visibility = View.GONE
+                                startCamera()
+                            }
+                        }
+                    }
+
+                    val request = ModuleInstallRequest.newBuilder()
+                        .addApi(optionalModuleApi)
+                        .setListener(listener)
+                        .build()
+
+                    moduleInstallClient.installModules(request)
+                        .addOnSuccessListener { installResponse ->
+                            if (installResponse.areModulesAlreadyInstalled()) {
+                                loadingOverlay.visibility = View.GONE
+                                startCamera()
+                            }
+                        }
+                        .addOnFailureListener {
+                            loadingText.text = "Error al iniciar descarga.\nVerifica tu conexión."
+                            progressBar.visibility = View.GONE
+                        }
+                }
+            }
+            .addOnFailureListener {
+                startCamera()
+            }
     }
 
     private fun createModernButton(title: String): Button {
@@ -276,6 +368,24 @@ class ScannerActivity : AppCompatActivity() {
         overlayView.setZoomFactor(zoomLevels[zoomIndex])
     }
 
+    private fun vibrateDevice() {
+        val vibrator = getSystemService(Context.VIBRATOR_SERVICE) as Vibrator
+        if (vibrator.hasVibrator()) {
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+                vibrator.vibrate(VibrationEffect.createOneShot(70, VibrationEffect.DEFAULT_AMPLITUDE))
+            } else {
+                @Suppress("DEPRECATION")
+                vibrator.vibrate(70)
+            }
+        }
+        // Forzar también haptic feedback por si la vibración está silenciada
+        previewView.isHapticFeedbackEnabled = true
+        previewView.performHapticFeedback(
+            HapticFeedbackConstants.VIRTUAL_KEY,
+            HapticFeedbackConstants.FLAG_IGNORE_GLOBAL_SETTING or HapticFeedbackConstants.FLAG_IGNORE_VIEW_SETTING
+        )
+    }
+
     private fun saveAllSettings() {
         val prefs = getSharedPreferences("OverlayPrefs", Context.MODE_PRIVATE)
         prefs.edit {
@@ -313,31 +423,36 @@ class ScannerActivity : AppCompatActivity() {
                 }
 
             val imageAnalyzer = ImageAnalysis.Builder()
-                .setTargetResolution(android.util.Size(1920, 1080))
+                .setTargetResolution(android.util.Size(1280, 720)) // Resolución optimizada para velocidad
                 .setBackpressureStrategy(ImageAnalysis.STRATEGY_KEEP_ONLY_LATEST)
                 .build()
                 .also { analyzer ->
-                    lifecycleScope.launch {
-                        val db = AppDatabase.getDatabase(this@ScannerActivity).deckDao()
-                        val validCardCodes = withContext(Dispatchers.IO) { db.getAllCardIds().toSet() }
+                    lifecycleScope.launch(Dispatchers.IO) {
+                        // Asegurarnos de tener los códigos de la caché global (ahora cargados desde Postgres en MainActivity)
+                        val codes = MainActivity.allCardIdsCache
                         
-                        analyzer.setAnalyzer(cameraExecutor, CardAnalyzer(
-                            context = this@ScannerActivity,
-                            validCardCodes = validCardCodes,
-                            onCodeDetected = { code ->
-                                if (code == lastSavedCard) return@CardAnalyzer
-                                
-                                runOnUiThread {
-                                    if (!scannedCards.contains(code)) {
+                        withContext(Dispatchers.Main) {
+                            analyzer.setAnalyzer(cameraExecutor, CardAnalyzer(
+                                context = this@ScannerActivity,
+                                validCardCodes = codes ?: emptySet(),
+                                onCodeDetected = { code ->
+                                    // Evitar registrar la misma carta varias veces seguidas mientras se mantiene el enfoque
+                                    if (code == lastSavedCard) return@CardAnalyzer
+                                    
+                                    runOnUiThread {
                                         scannedCards.add(code)
                                         lastSavedCard = code
                                         txtLastCode.text = "¡Detectado: $code!"
-                                        Log.d("SCAN", "Lista de cartas: $scannedCards")
+                                        
+                                        txtLastCode.removeCallbacks(resetLastCardRunnable)
+                                        txtLastCode.postDelayed(resetLastCardRunnable, 3000)
+                                        
+                                        vibrateDevice()
                                     }
-                                }
-                            },
-                            getScanRect = { overlayView.getScanRect() }
-                        ))
+                                },
+                                getScanRect = { overlayView.getScanRect() }
+                            ))
+                        }
                     }
                 }
 
@@ -387,7 +502,7 @@ class ScannerActivity : AppCompatActivity() {
         super.onRequestPermissionsResult(requestCode, permissions, grantResults)
         if (requestCode == REQUEST_CODE_PERMISSIONS) {
             if (allPermissionsGranted()) {
-                startCamera()
+                checkMLKitResources()
             } else {
                 Toast.makeText(this, "Permisos denegados.", Toast.LENGTH_SHORT).show()
                 finish()
