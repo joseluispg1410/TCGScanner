@@ -61,6 +61,9 @@ dependencies {
     // Para poder usar corrutinas en la pantalla principal
     implementation("androidx.lifecycle:lifecycle-runtime-ktx:2.6.2")
 
+    // RecyclerView para listas recicladas eficientes
+    implementation("androidx.recyclerview:recyclerview:1.3.2")
+
     // --- PERSISTENCIA (GSON) ---
     implementation("com.google.code.gson:gson:2.10.1")
 
