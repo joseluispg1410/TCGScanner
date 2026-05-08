@@ -58,6 +58,8 @@ class MainActivity : AppCompatActivity() {
 
     // Colores del tema Midnight Blue
     private val colorMidnight = Color.parseColor("#0A192F")
+    private val colorLightMidnight = Color.parseColor("#112240")
+    private val colorBorder = Color.parseColor("#233554")
     private val colorHeaderBg = Color.parseColor("#172A45")
     private val colorTextGold = Color.parseColor("#E6B800")
     private val colorTextLight = Color.parseColor("#CCD6F6")
@@ -128,20 +130,26 @@ class MainActivity : AppCompatActivity() {
             insets
         }
 
-        // 🛠️ TOOLBAR MODERNA (Cápsula blanca, Lupa izquierda, Hamburger derecha)
+        // 🛠️ TOOLBAR MINIMALISTA
         val toolbar = LinearLayout(this).apply {
             orientation = LinearLayout.HORIZONTAL
             gravity = Gravity.CENTER_VERTICAL
-            setPadding(10, 5, 10, 5) // Padding reducido para el contenedor
-            background = resources.getDrawable(R.drawable.toolbar_bg, null)
-            elevation = 15f
-
+            setPadding(30, 20, 30, 20)
+            setBackgroundColor(colorMidnight)
+            elevation = 0f
+            
+            // Línea inferior sutil
+            val bottomBorder = View(this@MainActivity).apply {
+                layoutParams = FrameLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, 2).apply {
+                    gravity = Gravity.BOTTOM
+                }
+                setBackgroundColor(colorBorder)
+            }
+            
             layoutParams = LinearLayout.LayoutParams(
                 ViewGroup.LayoutParams.MATCH_PARENT,
                 ViewGroup.LayoutParams.WRAP_CONTENT
-            ).apply {
-                setMargins(40, 30, 40, 30)
-            }
+            )
         }
 
         toolbarContent = FrameLayout(this).apply {
@@ -156,7 +164,8 @@ class MainActivity : AppCompatActivity() {
             searchBtn = ImageButton(this@MainActivity).apply {
                 setImageResource(R.drawable.ic_search_modern)
                 setBackgroundColor(Color.TRANSPARENT)
-                setPadding(20, 20, 20, 20)
+                setPadding(25, 25, 25, 25)
+                setColorFilter(colorTextLight)
                 setOnClickListener {
                     if (!isSearchMode) enterSearchMode() else exitSearchMode()
                 }
@@ -167,19 +176,20 @@ class MainActivity : AppCompatActivity() {
             tcgCode = intent.getStringExtra("TCG_CODE") ?: "YGO"
 
             toolbarTitle = TextView(this@MainActivity).apply {
-                text = tcgName
-                textSize = 18f
-                setTextColor(Color.parseColor("#333333"))
+                text = tcgName.uppercase()
+                textSize = 15f
+                setTextColor(colorTextLight)
                 setTypeface(null, android.graphics.Typeface.BOLD)
                 gravity = Gravity.CENTER
+                letterSpacing = 0.1f
                 layoutParams = LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f)
             }
 
             searchInput = EditText(this@MainActivity).apply {
                 hint = "Buscar..."
-                textSize = 16f
-                setTextColor(Color.BLACK)
-                setHintTextColor(Color.GRAY)
+                textSize = 15f
+                setTextColor(Color.WHITE)
+                setHintTextColor(colorTextDim)
                 background = null
                 visibility = View.GONE
                 layoutParams = LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f)
@@ -195,7 +205,8 @@ class MainActivity : AppCompatActivity() {
             val menuBtn = ImageButton(this@MainActivity).apply {
                 setImageResource(R.drawable.ic_menu_modern)
                 setBackgroundColor(Color.TRANSPARENT)
-                setPadding(20, 20, 20, 20)
+                setPadding(25, 25, 25, 25)
+                setColorFilter(colorTextLight)
                 setOnClickListener { view -> showPopupMenu(view) }
             }
 
@@ -214,14 +225,15 @@ class MainActivity : AppCompatActivity() {
             val cancelBtn = ImageButton(this@MainActivity).apply {
                 setImageResource(R.drawable.ic_close_modern)
                 setBackgroundColor(Color.TRANSPARENT)
-                setPadding(20, 20, 20, 20)
+                setPadding(25, 25, 25, 25)
+                setColorFilter(colorTextLight)
                 setOnClickListener { exitSelectionMode() }
             }
 
             selectionCountText = TextView(this@MainActivity).apply {
                 text = "0 seleccionados"
-                textSize = 16f
-                setTextColor(Color.BLACK)
+                textSize = 15f
+                setTextColor(colorTextGold)
                 setTypeface(null, android.graphics.Typeface.BOLD)
                 gravity = Gravity.CENTER
                 layoutParams = LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f)
@@ -230,7 +242,8 @@ class MainActivity : AppCompatActivity() {
             val deleteBatchBtn = ImageButton(this@MainActivity).apply {
                 setImageResource(R.drawable.ic_delete_modern)
                 setBackgroundColor(Color.TRANSPARENT)
-                setPadding(20, 20, 20, 20)
+                setPadding(25, 25, 25, 25)
+                setColorFilter(Color.RED)
                 setOnClickListener { deleteSelectedItems() }
             }
 
@@ -268,16 +281,16 @@ class MainActivity : AppCompatActivity() {
                 ))
         }
 
-        // 📊 PANEL DE ESTADÍSTICAS
+        // 📊 PANEL DE ESTADÍSTICAS MINIMALISTA
         statsPanel = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
             setPadding(60, 60, 60, 60)
             visibility = View.GONE
             
             val shape = GradientDrawable().apply {
-                setColor(colorHeaderBg)
-                cornerRadius = 40f
-                setStroke(3, colorTextGold)
+                setColor(colorLightMidnight)
+                cornerRadius = 30f
+                setStroke(1, colorBorder)
             }
             background = shape
             
@@ -286,19 +299,19 @@ class MainActivity : AppCompatActivity() {
                 ViewGroup.LayoutParams.WRAP_CONTENT,
                 Gravity.TOP
             ).apply { 
-                topMargin = 250 
-                leftMargin = 40
-                rightMargin = 40
+                topMargin = 200 
+                leftMargin = 50
+                rightMargin = 50
             }
-            elevation = 30f
+            elevation = 20f
         }
 
-        // 🔘 BOTÓN FLOTANTE (FAB)
+        // 🔘 BOTÓN FLOTANTE (FAB) MINIMALISTA
         fabScanner = ImageButton(this).apply {
             setImageResource(R.drawable.ic_camera_modern) 
-            val size = 180
+            val size = 150
             layoutParams = FrameLayout.LayoutParams(size, size, Gravity.BOTTOM or Gravity.CENTER_HORIZONTAL).apply {
-                bottomMargin = 80
+                bottomMargin = 60
             }
             val shape = GradientDrawable().apply {
                 shape = GradientDrawable.OVAL
@@ -306,8 +319,8 @@ class MainActivity : AppCompatActivity() {
             }
             background = shape
             setColorFilter(colorMidnight)
-            setPadding(40, 40, 40, 40)
-            elevation = 20f
+            setPadding(35, 35, 35, 35)
+            elevation = 10f
             setOnClickListener { openScanner() }
         }
 
@@ -745,7 +758,7 @@ class MainActivity : AppCompatActivity() {
         val toolbar = LinearLayout(this).apply {
             orientation = LinearLayout.HORIZONTAL
             gravity = Gravity.CENTER
-            setPadding(40, 80, 40, 40) // Aumentado de 50 a 80 para bajar los botones
+            setPadding(40, 40, 40, 40) 
             layoutParams = LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT)
         }
 
@@ -753,26 +766,25 @@ class MainActivity : AppCompatActivity() {
         val scanBtn = LinearLayout(this).apply {
             orientation = LinearLayout.HORIZONTAL
             gravity = Gravity.CENTER
-            setPadding(45, 22, 45, 22)
+            setPadding(40, 20, 40, 20)
             val shape = GradientDrawable().apply {
                 setColor(colorTextGold)
-                cornerRadius = 60f
-                elevation = 10f
+                cornerRadius = 15f
             }
             background = shape
             layoutParams = LinearLayout.LayoutParams(ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT).apply {
-                rightMargin = 25
+                rightMargin = 20
             }
             setOnClickListener { openScanner() }
         }
         val scanIcon = ImageView(this).apply {
             setImageResource(R.drawable.ic_camera_modern)
-            layoutParams = LinearLayout.LayoutParams(40, 40)
+            layoutParams = LinearLayout.LayoutParams(35, 35)
             setColorFilter(colorMidnight)
         }
         val scanText = TextView(this).apply {
             text = " ESCANEAR"
-            textSize = 13f
+            textSize = 12f
             setTextColor(colorMidnight)
             setTypeface(null, android.graphics.Typeface.BOLD)
         }
@@ -783,24 +795,24 @@ class MainActivity : AppCompatActivity() {
         val filterBtn = LinearLayout(this).apply {
             orientation = LinearLayout.HORIZONTAL
             gravity = Gravity.CENTER
-            setPadding(45, 22, 45, 22)
+            setPadding(40, 20, 40, 20)
             val shape = GradientDrawable().apply {
-                setColor(colorHeaderBg)
-                cornerRadius = 60f
-                setStroke(3, colorTextGold)
+                setColor(colorLightMidnight)
+                cornerRadius = 15f
+                setStroke(1, colorBorder)
             }
             background = shape
             setOnClickListener { view -> showFilterMenu(view) }
         }
         val filterIcon = ImageView(this).apply {
             setImageResource(R.drawable.ic_search_modern)
-            layoutParams = LinearLayout.LayoutParams(40, 40)
-            setColorFilter(colorTextGold)
+            layoutParams = LinearLayout.LayoutParams(35, 35)
+            setColorFilter(colorTextLight)
         }
         val filterText = TextView(this).apply {
             text = " FILTROS"
-            textSize = 13f
-            setTextColor(colorTextGold)
+            textSize = 12f
+            setTextColor(colorTextLight)
             setTypeface(null, android.graphics.Typeface.BOLD)
         }
         filterBtn.addView(filterIcon)
@@ -879,19 +891,19 @@ class MainActivity : AppCompatActivity() {
                     val collection = deck.codigoDeckSp ?: deck.codigoDeckEn ?: return@forEach
                     val name = deck.nombreDeck ?: "Colección"
 
-                    val item = LinearLayout(this@MainActivity).apply {
+                        val item = LinearLayout(this@MainActivity).apply {
                         orientation = LinearLayout.VERTICAL
                         gravity = Gravity.CENTER
                         setPadding(30, 40, 30, 40)
                         val shape = GradientDrawable().apply {
-                            setColor(colorHeaderBg)
-                            cornerRadius = 40f
-                            setStroke(2, colorTextGold)
+                            setColor(colorLightMidnight)
+                            cornerRadius = 30f
+                            setStroke(1, colorBorder)
                         }
                         background = shape
                         layoutParams = GridLayout.LayoutParams().apply {
                             width = itemWidth
-                            setMargins(0, 30, 0, 30)
+                            setMargins(0, 20, 0, 20)
                         }
                         setOnClickListener {
                             selectedCollection = collection
@@ -1195,15 +1207,15 @@ class MainActivity : AppCompatActivity() {
             val headerContainer = LinearLayout(this).apply {
                 orientation = LinearLayout.HORIZONTAL
                 gravity = Gravity.CENTER_VERTICAL
-                setPadding(30, 25, 30, 25)
+                setPadding(30, 20, 30, 20)
                 val shape = GradientDrawable().apply {
-                    setColor(colorHeaderBg)
-                    cornerRadius = 20f
-                    setStroke(2, colorTextGold)
+                    setColor(colorLightMidnight)
+                    cornerRadius = 15f
+                    setStroke(1, colorBorder)
                 }
                 background = shape
                 val params = LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT)
-                params.setMargins(20, 40, 20, 10)
+                params.setMargins(20, 30, 20, 10)
                 layoutParams = params
                 setOnClickListener {
                     collectionVisibility[collection] = !isExpanded
@@ -1284,11 +1296,11 @@ class MainActivity : AppCompatActivity() {
             orientation = LinearLayout.VERTICAL; gravity = Gravity.CENTER; setPadding(10, 10, 10, 10)
             layoutParams = GridLayout.LayoutParams().apply { width = resources.displayMetrics.widthPixels / columns - 40 }
             
-            // Selección visual: Borde dorado si está seleccionada
+            // Selección visual: Fondo sutil si está seleccionada
             val shape = GradientDrawable().apply {
-                setColor(if (isSelected) Color.parseColor("#33E6B800") else Color.TRANSPARENT)
-                cornerRadius = 20f
-                if (isSelected) setStroke(6, colorTextGold)
+                setColor(if (isSelected) Color.parseColor("#1A64FFDA") else Color.TRANSPARENT)
+                cornerRadius = 15f
+                if (isSelected) setStroke(2, Color.parseColor("#64FFDA"))
             }
             background = shape
         }

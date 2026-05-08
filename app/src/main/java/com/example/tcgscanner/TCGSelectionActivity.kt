@@ -17,7 +17,8 @@ class TCGSelectionActivity : AppCompatActivity() {
 
     private lateinit var listContainer: LinearLayout
     private val colorMidnight = Color.parseColor("#0A192F")
-    private val colorHeaderBg = Color.parseColor("#172A45")
+    private val colorLightMidnight = Color.parseColor("#112240")
+    private val colorBorder = Color.parseColor("#233554")
     private val colorTextGold = Color.parseColor("#E6B800")
 
     override fun onCreate(savedInstanceState: Bundle?) {
@@ -34,16 +35,17 @@ class TCGSelectionActivity : AppCompatActivity() {
         listContainer = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
             gravity = Gravity.CENTER_HORIZONTAL
-            setPadding(40, 100, 40, 100)
+            setPadding(60, 150, 60, 150)
         }
 
         val title = TextView(this).apply {
-            text = "SELECCIONA UN JUEGO"
-            textSize = 22f
+            text = "TCG HUB"
+            textSize = 24f
             setTextColor(Color.WHITE)
             setTypeface(null, android.graphics.Typeface.BOLD)
             gravity = Gravity.CENTER
-            setPadding(0, 0, 0, 80)
+            setPadding(0, 0, 0, 120)
+            letterSpacing = 0.1f
         }
 
         listContainer.addView(title)
@@ -75,12 +77,13 @@ class TCGSelectionActivity : AppCompatActivity() {
         
         // Re-añadir título
         val title = TextView(this).apply {
-            text = "SELECCIONA UN JUEGO"
-            textSize = 22f
+            text = "TCG HUB"
+            textSize = 24f
             setTextColor(Color.WHITE)
             setTypeface(null, android.graphics.Typeface.BOLD)
             gravity = Gravity.CENTER
-            setPadding(0, 0, 0, 80)
+            setPadding(0, 0, 0, 120)
+            letterSpacing = 0.1f
         }
         listContainer.addView(title)
 
@@ -88,16 +91,16 @@ class TCGSelectionActivity : AppCompatActivity() {
             val card = LinearLayout(this).apply {
                 orientation = LinearLayout.VERTICAL
                 gravity = Gravity.CENTER
-                setPadding(0, 0, 0, 0)
                 val shape = GradientDrawable().apply {
-                    setColor(colorHeaderBg)
-                    cornerRadius = 40f
-                    setStroke(3, colorTextGold)
+                    setColor(colorLightMidnight)
+                    cornerRadius = 30f
+                    setStroke(1, colorBorder)
                 }
                 background = shape
-                layoutParams = LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, 500).apply {
-                    setMargins(0, 0, 0, 60)
+                layoutParams = LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, 550).apply {
+                    setMargins(0, 0, 0, 80)
                 }
+                clipToOutline = true
                 setOnClickListener {
                     val intent = Intent(this@TCGSelectionActivity, MainActivity::class.java)
                     intent.putExtra("TCG_ID", tcg.id)
@@ -114,16 +117,18 @@ class TCGSelectionActivity : AppCompatActivity() {
                     Glide.with(this@TCGSelectionActivity).load(tcg.imageUrl).into(this)
                 } else {
                     setImageResource(android.R.drawable.ic_menu_gallery)
+                    setColorFilter(colorBorder)
                 }
             }
 
             val name = TextView(this).apply {
-                text = tcg.name
-                textSize = 18f
+                text = tcg.name.uppercase()
+                textSize = 16f
                 setTextColor(Color.WHITE)
                 setTypeface(null, android.graphics.Typeface.BOLD)
                 gravity = Gravity.CENTER
-                setPadding(0, 20, 0, 20)
+                setPadding(0, 30, 0, 30)
+                letterSpacing = 0.05f
             }
 
             card.addView(image)

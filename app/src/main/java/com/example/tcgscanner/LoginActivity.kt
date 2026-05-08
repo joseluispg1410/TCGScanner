@@ -16,8 +16,11 @@ import kotlinx.coroutines.launch
 class LoginActivity : AppCompatActivity() {
 
     private val colorMidnight = Color.parseColor("#0A192F")
-    private val colorHeaderBg = Color.parseColor("#172A45")
+    private val colorLightMidnight = Color.parseColor("#112240")
+    private val colorBorder = Color.parseColor("#233554")
     private val colorTextGold = Color.parseColor("#E6B800")
+    private val colorTextLight = Color.parseColor("#CCD6F6")
+    private val colorTextDim = Color.parseColor("#8892B0")
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -26,51 +29,53 @@ class LoginActivity : AppCompatActivity() {
             orientation = LinearLayout.VERTICAL
             gravity = Gravity.CENTER
             setBackgroundColor(colorMidnight)
-            setPadding(80, 80, 80, 80)
+            setPadding(100, 80, 100, 80)
         }
 
         val logo = ImageView(this).apply {
             setImageResource(R.drawable.logo_letras_horizontales)
-            layoutParams = LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, 400).apply {
-                bottomMargin = 100
+            layoutParams = LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, 350).apply {
+                bottomMargin = 120
             }
         }
 
         val emailInput = EditText(this).apply {
             hint = "Email"
-            setHintTextColor(Color.GRAY)
+            setHintTextColor(colorTextDim)
             setTextColor(Color.WHITE)
             background = GradientDrawable().apply {
-                setColor(colorHeaderBg)
-                cornerRadius = 20f
-                setStroke(2, Color.GRAY)
+                setColor(colorLightMidnight)
+                cornerRadius = 15f
             }
-            setPadding(40, 40, 40, 40)
+            setPadding(50, 40, 50, 40)
             layoutParams = LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT).apply {
-                bottomMargin = 40
+                bottomMargin = 30
             }
         }
 
         val passwordInput = EditText(this).apply {
             hint = "Contraseña"
             inputType = android.text.InputType.TYPE_CLASS_TEXT or android.text.InputType.TYPE_TEXT_VARIATION_PASSWORD
-            setHintTextColor(Color.GRAY)
+            setHintTextColor(colorTextDim)
             setTextColor(Color.WHITE)
             background = GradientDrawable().apply {
-                setColor(colorHeaderBg)
-                cornerRadius = 20f
-                setStroke(2, Color.GRAY)
+                setColor(colorLightMidnight)
+                cornerRadius = 15f
             }
-            setPadding(40, 40, 40, 40)
+            setPadding(50, 40, 50, 40)
             layoutParams = LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT).apply {
-                bottomMargin = 80
+                bottomMargin = 100
             }
         }
 
         val loginBtn = Button(this).apply {
             text = "ENTRAR"
             setTextColor(colorMidnight)
-            setBackgroundColor(colorTextGold)
+            background = GradientDrawable().apply {
+                setColor(colorTextGold)
+                cornerRadius = 15f
+            }
+            stateListAnimator = null // Flat design
             setTypeface(null, android.graphics.Typeface.BOLD)
             setOnClickListener {
                 val email = emailInput.text.toString()
@@ -81,23 +86,47 @@ class LoginActivity : AppCompatActivity() {
                     Toast.makeText(this@LoginActivity, "Rellena todos los campos", Toast.LENGTH_SHORT).show()
                 }
             }
-            layoutParams = LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT).apply {
+            layoutParams = LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, 150).apply {
                 bottomMargin = 40
             }
         }
 
-        val googleBtn = Button(this).apply {
-            text = "CONTINUAR CON GOOGLE"
-            setTextColor(Color.WHITE)
-            setBackgroundColor(Color.parseColor("#4285F4"))
+        val googleBtn = LinearLayout(this).apply {
+            orientation = LinearLayout.HORIZONTAL
+            gravity = Gravity.CENTER
+            val shape = GradientDrawable().apply {
+                setColor(Color.TRANSPARENT)
+                cornerRadius = 15f
+                setStroke(2, colorBorder)
+            }
+            background = shape
+            setPadding(0, 35, 0, 35)
+            layoutParams = LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT).apply {
+                bottomMargin = 60
+            }
             setOnClickListener {
                 Toast.makeText(this@LoginActivity, "Próximamente: Login con Google", Toast.LENGTH_SHORT).show()
             }
+            
+            val icon = ImageView(this@LoginActivity).apply {
+                setImageResource(android.R.drawable.ic_menu_gallery) // Placeholder for Google Icon
+                layoutParams = LinearLayout.LayoutParams(40, 40).apply { rightMargin = 20 }
+                setColorFilter(Color.WHITE)
+            }
+            val txt = TextView(this@LoginActivity).apply {
+                text = "CONTINUAR CON GOOGLE"
+                setTextColor(Color.WHITE)
+                textSize = 12f
+                setTypeface(null, android.graphics.Typeface.BOLD)
+            }
+            addView(icon)
+            addView(txt)
         }
 
         val registerLink = TextView(this).apply {
             text = "¿No tienes cuenta? Regístrate aquí"
-            setTextColor(colorTextGold)
+            setTextColor(colorTextDim)
+            textSize = 13f
             gravity = Gravity.CENTER
             setPadding(0, 40, 0, 0)
             setOnClickListener {
